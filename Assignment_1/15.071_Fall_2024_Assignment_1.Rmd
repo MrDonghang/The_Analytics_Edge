@@ -1,0 +1,375 @@
+---
+title: "15.071 Fall 2024: Assignment 1"
+author: "Donghang Li"
+output: html_notebook
+---
+
+This assignment consists of 2 questions that cover the following concepts.
+
+-   **Problem 1** (60 Points): Linear Regression
+-   **Problem 2** (40 Points): CART for Regression
+
+## Notes:
+
+-   **Visual Model.** Enable "Visual Mode" in RStudio for a better editing experience. You can find this near options for Bold, Italics...etc (it should say "Source" and "Visual"). Your editing experience should feel like using Microsoft Word or Notion.
+
+-   **Writing Code.** You only need to write code in the cells marked `### YOUR CODE HERE (...) ###`. In the parentheses, we will be clear about what we expect you to print out from the cell.
+
+-   **Writing Responses.** When answering the questions in this document, simply replace the "*Replace this text with your response"* with your answer. Keep the text in italics, as it makes grading easier. Do not change or delete any other text from this file. We are looking for short responses (no more than 2-3 sentences) that are precisely answer the question. For questions that have multiple sub-questions, you can answer each of the sub-questions in a sentence or two.
+
+## Loading Libraries
+
+Load the following libraries. All libraries should already be installed if you completed the Setup correctly.
+
+```{r warning=FALSE, include=FALSE}
+library(dplyr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+```
+
+# Problem 1: Linear Regression for Predicting Housing Prices in Ames, Iowa
+
+In this problem, we consider the Ames, Iowa Housing Prices dataset, which describes sales of 2,836 properties in the town of Ames, Iowa from 2006 to 2010. You will work with the dataset provided in the `AmesSales_modified.csv` file, which has been pre-processed to simplify the analysis. We started with a partially processed set available on [Github](https://github.com/mikearango/DATS_Final) and selected a few of the most relevant variables to include in our analysis. We also modified a few entries in the data.
+
+The dataset contains 12 variables, described below. The first variable is the property's sale price---which we aim to predict. The other variables describe the property details in quantitative terms (square footage, number of rooms, date of construction...etc.). There is one categorical variable, BldgType, which describes different types of homes (e.g. townhouse, duplex, etc.).
+
+-   **SalePrice**: the property's sale price (dollars)
+
+-   **TotalRooms**: Total number of rooms
+
+-   **Bedrooms**: \# bedrooms
+
+-   **FullBath**: Full bathrooms
+
+-   **HalfBath**: Half baths
+
+-   **LivArea**: Ground living area (sq. feet)
+
+-   **Fireplaces**: Number of fireplaces
+
+-   **GarageArea**: Size of garage (sq. feet)
+
+-   **PoolArea**: Size of pool (sq. feet)
+
+-   **YearBuilt**: Original construction date
+
+-   **YearSold**: Year Sold
+
+-   **BldgType**: Type of dwelling
+
+Let's read in the dataset first to the variable `ames` and examine the first 6 rows of this dataset with the `head` function. Remember to save the data file `AmesSales_modified.csv` file is in the same folder as this file (`Assignment 1.Rmd`). Then, click on Session -\> Set Working Directory -\> To Source File Location.
+
+```{r}
+ames <- read.csv("AmesSales_modified.csv")
+head(ames)
+```
+
+## (a): Visualizing SalePrice (5 Points)
+
+Use the `summary()` and `hist()` function on the `SalePrice` column of `ames` to view the distribution of the dependent variable (as displayed below).
+
+```{r}
+### YOUR CODE HERE (print summary statistics) ###
+summary(ames$SalePrice)
+```
+
+```{r}
+### YOUR CODE HERE (print the histogram) ###
+hist(ames$SalePrice, main='Histogram of Sale Price', col='lightblue', xlab = 'Sale Price')
+```
+
+**Question 1**: Comment briefly on the distribution of `SalePrice`. In Lecture 3 on medical cost prediction, we took the log of the dependent variable. Explain briefly why we do not need to take the log of SalePrice here.
+
+***Answer 1:** The distribution presents a certain right skew (the right tail is longer), but there is no extreme skew. The difference between the median and the mean is small, indicating that most of the data is concentrated within a reasonable range. Because our data does not span multiple orders of magnitude (in the magnitude of 10\^5), ranging from 62,383 to 455,000, there is no need to take the log transformation of SalePrice.*
+
+## (b): Train/Test Split (5 Points)
+
+Let's train a linear regression model to predict `SalePrice`. But first, we will perform a test/train split by randomly dividing the dataset `ames` into 70% for training and 30% for testing. The following code creates the dataframes `train` and `test`.
+
+```{r}
+set.seed(10)
+idx = createDataPartition(ames$SalePrice, p=0.70, list = FALSE)
+train = ames[idx, ]
+test = ames[-idx, ]
+
+dim(train)
+```
+
+The training set has 1987 rows and 12 columns.
+
+**Question 2**: What is the purpose of the the line of code `set.seed(10)`.
+
+***Answer 2**: By running this code, we can set ‌random number seeds to ensure that the same sequence of random numbers is generated every time the same code is run, resulting in the same train and test dataset. Otherwise, we may generate a total different sequence and get a different result on the same code.*
+
+## (c): Training a Linear Regression Model (10 Points)
+
+Train a linear regression model using `train` to predict SalePrice using all the other variables. Name your model `model`. Run the `summary` function on `model`.
+
+```{r}
+### YOUR CODE HERE (print the summary of model) ###
+model <- lm(SalePrice ~ ., data = train)
+summary(model)
+```
+
+**Question 3**: What is the in-sample (training) R2 of your model? Are there any variables which are not significant? What does it mean for a variable to not be significant?
+
+***Answer 3:** The in-sample R2 of my model is 0.744. Taking 0.1 as the p-value threshold, the variables 'TotalRooms', 'FullBath', and 'YearSold' are not significant, (not including the intercept term). An insignificant variable means there is no enough evidence to conclude that this coefficient is non-zero, which means the coefficient in the linear model is close to zero given the specific significance level.*
+
+Note: Throughout this assignment, we will refer to the R2 on the training set as the training R2 or in-sample R2, while the R2 on the testing dataset is referred to as the testing R2 or out-of-sample R2.
+
+**Question 4**: Please interpret the coefficient for `BldgTypeDuplex` in this linear regression model. What is the reference class? (Hint: Run `table(train$BldgType)`).
+
+***Answer 4**:* *All else being equal, being a duplex is expected to decrease the sale price of the house by 34,640 (USD). The reference class here is '1Fam'.*
+
+```{r}
+table(train$BldgType)
+```
+
+## (d): Analyzing the Residuals (5 Points)
+
+R offers a number of functional capabilities to help assess the quality of regression models and identify potential problems with the model. For linear regression models, you can access a significant amount of information by running the `plot` function. Here `plot` does not mean plotting the regression line, rather it refers to a set of scatter-plot graphs of various objects like residuals of training data prediction values and the like.
+
+Of particular interest to us is one the graph of the Fitted Value vs. Residual, which we can show by adding `which=1`. Run the following code (where `model` is the name of your model from (c)).
+
+```{r}
+plot(model, which=1)
+```
+
+Here we will focus on identifying outliers. Outliers can sometimes have a disproportionate effect on the regression model and lead to poor estimates of the model coefficients. The plot above shows the residuals of the SalePrice regression model (vertical axis) and the “fitted values” which are the model’s predicted values on the training set (horizontal axis). In this plot, three extreme outliers are labeled: observations “1142”, “1450”, and “2113” (please email the teaching team if you do not see these 3 labels). These three outliers have very large negative residuals, which means that the regression model does not fit these rows well (the predicted prices are significantly higher than the actual prices).
+
+Let's print these three observations and compare them to the rest of the training data, using the following commands.
+
+```{r}
+outliers = c("1142", "1450", "2113")
+train[outliers, ]
+```
+
+Why are these 3 data points considered outliers? Let's examine some summary statistics for the `SalePrice` and `LivArea` using the `summary` command below.
+
+```{r}
+summary(train$SalePrice)
+```
+
+```{r}
+summary(train$LivArea)
+```
+
+**Question 5**: Explain intuitively why these 3 data points are considered outliers (i.e., why is their sale price unexpected). What are some potential explanations for why these 3 data points are in the dataset?
+
+***Answer 5**: All these 3 data points have a rather living area far above the mean value, however, their sale prices are relatively low with 2 data points even below the average. That's the reason why they are considered as outliers. I think maybe there are some other unobserved factors causing the low price, for example, murder happened in these houses. Or maybe there is something wrong with the data recording process.*
+
+## (e): Dealing with Outliers (15 Points)
+
+When we find outliers that are also very influential in the model, we can consider the following options:
+
+-   **Remove the observations from the model**. This is appropriate if we believe the outliers are due to data errors, or if the outliers are substantially different from the target population that we are trying to model (for example, we could probably justify excluding a professional athlete from a model that uses data on physical exercise habits).
+
+-   **Treat the outlier values as missing data.** This should only be done if we believe the outlier values are due to data errors. Depending on the type of application, we may be able to use imputation or other methods to avoid discarding the entire observation from our dataset.
+
+-   **Keep the outliers in our model**. If we do not believe that there is anything inherently wrong with the outlier, then it may reflect something important about the system we are trying to model.
+
+In the setting of this model and this dataset, we will remove the outliers from our dataset. You can use this code to create a new training set (called `train2`) without the outliers.
+
+```{r}
+train2 = train[-which(rownames(train) %in% outliers), ]
+dim(train2)
+```
+
+`train2` has 1984 rows (3 fewer than the 1987 that `train` had). This makes sense since we removed 3 rows.
+
+Train a new linear regression model using `train2`. Name your model `model2`. Show a `summary` of `model2`.
+
+```{r}
+### YOUR CODE HERE (print the summary of model2) ###
+model2 <- lm(SalePrice ~ ., data = train2)
+summary(model2)
+```
+
+**Question 6**: What is the training (in-sample) R2 of your model (with outliers removed)? How does this compare to the model without removing outliers?
+
+***Answer 6:** The new in-sample R2 is 0.7824. It has increased by about 0.04 compared to the model without removing outliers.*
+
+**Question 7**: Suppose a property developer in Iowa looks at your model (`model2`) and decides to encourage clients to add an extra fireplace because *a model developed at MIT shows that every additional fireplace constructed causes the value of a house to rise by more than \$10,000*. Is this claim supported by the model? Why or Why not?
+
+***Answer 7:** This claim is supported by the model. Since the coefficient of 'Fireplaces' is over 10,000, which means holding all other factors the same, the sale price of the house is expected to increase by 11,400 USD. And this coefficient is significant.*
+
+**Question 8**: Are there any model coefficients that have the “wrong” (i.e., counter-intuitive) sign? Is there anything surprising to you about the statistical significance (or lack thereof) of certain coefficients? Check for correlations among the numerical variables in the training data and comment on how these correlations may explain these phenomena (code provided below).
+
+***Answer 8:** The number of bedrooms ('Bedrooms'), full ('FullBath') or half ('HalfBath') bathrooms has a negative effect on sale price, which is really counter-intuitive. Also, the number of total rooms ('TotalRooms') is not significant. I think that is partly because of the multicollinearity. According to the correlation matrix, many variables are highly correlated, such as 'TotalRooms' and 'LivArea' (0.79). This means that 'TotalRooms' may not be significant in the model because 'LivArea' has already captured the effect in relation to house prices. Similarly, 'Bedrooms' also has a high correlation with other variables such as 'TotalRooms' (0.69). These correlations can lead to multicollinearity thus reducing their individual effects, which affects the coefficient sign and significance.*
+
+```{r}
+### Code for checking correlation among numeric columns (All except BldgType)
+train2_numeric <- select(train2, -c('BldgType'))
+cor(train2_numeric)
+```
+
+## (f): Out-of-Sample Performance (10 Points)
+
+Let's calculate the out-of-sample R2 for `model` and `model2` on the testing data `test`. You can use the `predict` function to make predictions, and then calculate the `sse` and `sst` appropriately.
+
+```{r}
+### YOUR CODE HERE (print OSR^2 for model) ### 
+predictions <- predict(model, newdata = test)
+
+sse = sum((test$SalePrice - predictions)^2)
+sst = sum((test$SalePrice - mean(train$SalePrice))^2)
+
+1 - sse / sst
+```
+
+```{r}
+### YOUR CODE HERE (print OSR^2 for model2) ### 
+predictions <- predict(model2, newdata = test)
+
+sse = sum((test$SalePrice - predictions)^2)
+sst = sum((test$SalePrice - mean(train2$SalePrice))^2)
+
+1 - sse / sst
+```
+
+**Question 9**: Compare the two OSR\^2 from `model` and `model2`. Do they align with your intuition? By removing outliers, is the out-of-sample R2 *guaranteed* to increase? Why or Why Not?
+
+***Answer 9:** They align with my intuition that by removing outliers, the out-of-sample R2 is supposed* *to increase. Because after removing outliers, the model is expected have a better fitting performance, as outliers can skew the model and lead to poor generalization on new data. However, it is not guaranteed the OSR2 to increase. When removing the 'outliers', we may neglect some key information reflected in these data points, thus failing to capture the real pattern. Also, there may be other data points reckoned as 'outliers' in the test dataset, so the model may do a bad job on it.*
+
+## (g): A Simpler Model (10 Points)
+
+Train one final linear regression model using only the 5 varaibles `BldgType`, `YearBuilt`, `Fireplaces`, `GarageArea`, `LivArea`. Call this model `model3`. Remember to train it on `train2` (outliers removed). Print out a `summary` of the model.
+
+```{r}
+### YOUR CODE HERE (print the summary of model3) ### 
+model3 <- lm(SalePrice ~ BldgType + YearBuilt + Fireplaces + GarageArea + LivArea, data = train2)
+summary(model3)
+```
+
+Calculate the out-of-sample R\^2 for `model3`.
+
+```{r}
+### YOUR CODE HERE (print OSR^2 for model3) ###
+
+predictions <- predict(model3, newdata = test)
+
+sse = sum((test$SalePrice - predictions)^2)
+sst = sum((test$SalePrice - mean(train2$SalePrice))^2)
+
+1 - sse / sst
+```
+
+**Question 11**: Discuss the pros and cons of `model3` (5 variables) versus `model2` (many variables). If you were an investor trying to flip homes in Ames, Iowa, which model would you use? Which model would you use to analyze the relationship between different features and SalePrice?
+
+***Answer 11:** Model3 provides more interpretability and also avoids some multicollinearity problems, but it has a relative lower fitting performance and prediction accuracy. Model2 provides a higher R2 and thus a higher fitting performance, however, it is hard for investors to make analysis and decisions based on it because there are too many variables. Although model3 has a relatively lower R2, it is easier to interpret and use. So if I were an investor, I would choose model3 instead of model2. Although we have sacrificed a little for accuracy, we improved our efficiency and convenience a lot. But when it comes to analysis, I would choose model2 because it is more accurate and collective.*
+
+# Problem 2: CART for Predicting SalePrice
+
+In this problem, we will use a CART model instead of a linear regression model.
+
+## (a): Train a CART Model and Visualize (5 Points)
+
+Train a CART model (call it `tree.model`) on the training set without outliers (`train2`). Plot an image of your tree using the `prp()` function.
+
+```{r}
+### YOUR CODE HERE (print the tree) ### 
+tree.model = rpart(SalePrice ~ ., 
+                   data=train2)
+prp(tree.model, type=1)
+```
+
+**Question 12**: Looking at the visualization of the tree, which variables seem important? Do these variables match the significant variables from `model2`?
+
+***Answer 12:** The variables 'YearBuil', 'LivArea', 'GarageAr', and 'Fireplac' are important in the CART model. It aligns with the significant variables from model2 that these 4 variables have the highest absolute value of t-value.*
+
+## (b): Computing R2 (5 Points)
+
+Use the model `tree.model` to make predictions on the training data `train2`. Compute the in-sample R2 as well as the out-of-sample R2.
+
+```{r}
+### YOUR CODE HERE (print the in-sample R^2) ### 
+
+predictions_train <- predict(tree.model, newdata = train2)
+
+calc_r2 <- function(actual, predicted, train) {
+  1 - sum((actual - predicted)^2) / sum((actual - mean(train))^2)
+}
+
+results <- calc_r2(train2$SalePrice, predictions_train, train2$SalePrice)
+
+results
+```
+
+```{r}
+### YOUR CODE HERE (print the out-of-sample R^2) ### 
+
+predictions_test <- predict(tree.model, newdata = test)
+
+results <- calc_r2(test$SalePrice, predictions_test, train2$SalePrice)
+
+results
+```
+
+**Question 13:** By comparing the in-sample and out-of-sample R\^2's, do you see any signs of overfitting?
+
+***Answer 13:** I do not see any signs of overfitting because the 2 values are quite close to each other, which means our CART model has a good generalization capacity.*
+
+## (c): Fitting a Larger Tree (10 Points)
+
+Let's fit a larger tree to see if we can obtain more refined predictions. Set the `cp` (complexity parameter) value of the tree to 0.0005. The default value of `cp` is 0.01. Call this model `tree.model.large`. This tree is quite complex and difficult to visualize.
+
+```{r}
+### YOUR CODE HERE (print the tree for tree.model.large) ### 
+tree.model.large = rpart(SalePrice ~ ., 
+                   data=train2, cp=0.0005)
+prp(tree.model.large, type=1)
+```
+
+Compute the in-sample R2 and out-of-sample R2 for `tree.model.large`.
+
+```{r}
+### YOUR CODE HERE (print the in-sample R^2) ### 
+
+predictions_train <- predict(tree.model.large, newdata = train2)
+
+results <- calc_r2(train2$SalePrice, predictions_train, train2$SalePrice)
+
+results
+```
+
+```{r}
+### YOUR CODE HERE (print the out-of-sample R^2) ### 
+
+predictions_test <- predict(tree.model.large, newdata = test)
+
+results <- calc_r2(test$SalePrice, predictions_test, train2$SalePrice)
+
+results
+```
+
+**Question 14**: Why does changing the cp value from 0.01 to 0.0005 result in a more complex tree? What other parameters of `rpart` could we have changed to achieve the same results?
+
+***Answer 14:** cp value means the complexity parameter. Because with a lower cp, even if those splits which could only contribute to a slight increase in R2 will also be added into the tree model, thus making the tree more complicated. We can also change the minsplit, minbucket or maxdepth to achieve that.*
+
+## (d): Comparing Models (20 Points)
+
+Let's summarize all our results below. Fill in the numbers below with appropriate R\^2 values.
+
+| Model Name                                      | In-Sample | Out-of-sample |
+|-------------------------------------------------|:---------:|:-------------:|
+| Linear Regression with All Variables (`model2`) |   0.78    |     0.79      |
+| Linear Regression with 5 Variables (`model3`)   |   0.75    |     0.77      |
+| CART (`tree.model`)                             |   0.71    |     0.70      |
+| CART Large (`tree.model.large`)                 |   0.85    |     0.80      |
+
+**Question 15**: Discuss the results from the four models above. What behavior do you see that is expected versus what behavior is suprising?
+
+***Answer 15:** A large CART model performs better in both in-sample and out-of-sample R2 than a default CART model is expected. In addition, the larger gap between in-sample and out-of-sample R2 in the large CART model is also expected, because the larger CART model may face an overfitting problem. However, it is surprising that the out-of-sample R2 is greater than the in-sample R2 in both of the linear regression models. This means that the linear regression model is not likely to face an overfitting problem, with better generalization capacity.*
+
+**Question 16**: We have seen that the complexity parameter (cp) can have a significant effect on the resulting CART models. I would like to build a model with high out-of-sample R2 by choosing an appropriate `cp` value. Can you suggest a methodology for determining the "best" value of the `cp` parameter? (You do not need to implement this methodology, just describe it in words)
+
+***Answer 16:** We can repeat the process of building CART models using different cp values and then calculate the out-of-sample R2. We can then compare the results derived from different cp value models and choose the one with the highest out-of-sample R2, which is an appropriate cp value. But remember to use the same train and test dataset when we repeat the process. More complicatedly, we can also use the k-fold cross-validation method in machine learning to address this issue.*
+
+**Question 17**: Throughout this question, when comparing model A and model B, we often say that model A is better than model B because model A has a higher out-of-sample R\^2, which implies that model A performs better on unseen data. What is a potential issue with this approach/conclusion?
+
+***Answer 17:** Comparing models solely based on out-of-sample R2 can be misleading because a higher R2 doesn't necessarily mean a model is better. Models with simpler structures can offer better interpretability, which is valuable for understanding the relationships between variables and making decisions, though with a lower out-of-sample R2. We have to take the real situation into account.*
+
+**Question 18**: Suppose that a luxury mansion is being built in Ames, Iowa with a sales price of \$5,000,000. This mansion has a living area of 10,000 square feet, which is much larger than any of the examples in our training dataset. Discuss how the predictions of linear regression and CART would differ for this luxury mansion. Which model would make a prediction closer to 5,000,000?
+
+***Answer 18:*** *I think linear regression model would make a closer prediction. Because linear regression models assume a linear relationship between the dependent variables and independent variables. Although there are no such extreme values in the training data, with a linear relationship, we can extrapolate reasonably to calculate a large number. However, the possible results provided by the CART model heavily relies on the data we have in the training set, not likely to predict a value out of the range, resulting in prediction bias. That's the reason why I think linear regression model would make a closer prediction.*
