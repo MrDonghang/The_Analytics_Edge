@@ -1,0 +1,444 @@
+---
+title: "15.071 Fall 2024: Assignment 4"
+subtitle: "Clustering and Text Analytics"
+author: "Donghang Li"
+date: "2024-10-30"
+output: html_notebook
+---
+
+Let's first install and load a few libraries for this entire assignment. You just need to run the following code once. You can click "No" if RStudio asks you to restart R.
+
+```{r eval=FALSE}
+install.packages('flexclust')
+install.packages('tm')
+install.packages("RColorBrewer")
+install.packages("SnowballC")
+```
+
+# Problem 1: Clustering Automobile Customers
+
+In this problem, we will explore how clustering can be used to help businesses learn more about their customers. We will use the dataset `autoSurvey2024.csv`, which contains data from a customer survey conducted by a German automobile manufacturer1. Survey respondents were customers who had purchased a vehicle from this manufacturer within the previous 3 months, and these customers were asked to rate several different aspects of their purchased automobile as either “important” (1) or “not important” (0). Each observation (row) corresponds to a customer. This dataset contains 793 rows (customers) and 13 columns (variables). There are also two features regarding the demographics of the customer. The variables in the dataset are described in Table 1.
+
+| Variable             | Description                                       | 0             | 1                 |
+|--------------|------------------------------|--------------|--------------|
+| `driving_properties` | General driving properties                        | not important | important         |
+| `interior`           | Interior design and aesthetics                    | not important | important         |
+| `technology`         | Technological features                            | not important | important         |
+| `comfort`            | Comfort of seats and interior                     | not important | important         |
+| `reliability`        | Reliability and dependability                     | not important | important         |
+| `handling`           | Handling and maneuverability                      | not important | important         |
+| `power`              | Power and performance of the engine               | not important | important         |
+| `consumption`        | Fuel consumption, i.e. miles per gallon           | not important | important         |
+| `sporty`             | Sports feeling (i.e., sports utility vehicle SUV) | not important | important         |
+| `safety`             | Safety features                                   | not important | important         |
+| `space`              | Amount of space                                   | not important | important         |
+| `gender`             | Gender of the customer                            | male          | female            |
+| `household`          | Size of the customer’s household                  | 1-2 people    | at least 3 people |
+
+: **Table 1**: Variables in the Automobile Customer Dataset
+
+## (a) Exploratory Analysis [15 Points]
+
+Let's start with some exploratory analysis of the dataset. Let's load the necessary libraries and the dataset.
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggcorrplot)
+library(flexclust)
+library(RColorBrewer)
+
+auto = read.csv("autoSurvey2024.csv")
+head(auto)
+```
+
+To get a better understanding of the data, let's calculate the means of each column in the entire dataset using the `colMeans` function.
+
+```{r}
+var.means <- colMeans(auto, na.rm = TRUE)
+var.means <- sort(var.means, decreasing = TRUE)
+var.means.sorted <- data.frame(var.means)
+var.means.sorted
+```
+
+**Question 1.** Using the output above, what are the three most important features and three least important features to the survey respondents. Comment on the general demographics (gender/household) of the surveyed customers.
+
+**Answer 1.** *According to the output, the three most important features are driving_properties, power, and technology. The three least important features are consumption, interior, and space. Most of the surveyed customers are male and only roughly 6% of them are female. The household size of about 60 percent of the surveyed customers is at least 3 people, around 40 percent of them only consist of 1-2 people.*
+
+Let's investigate whether there are any significant differences between male and female respondents, as well as household size.
+
+```{r}
+auto %>%
+  group_by(gender) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+```
+
+```{r}
+auto %>%
+  group_by(household) %>%
+  summarise(across(everything(), mean, na.rm = TRUE))
+```
+
+**Question 2.** Comment on whether there are any significant differences in automobile preferences across the two dimensions above (gender and household size).
+
+**Answer 2.** *There are several significant differences between two dimensions. For gender differences, males show a higher preference for "driving_properties", "interior", "technology", "power", "consumption", "sporty", and "space" if taking 0.05 as a threshold, while females prefer "safety". For household size differences, household with 1-2 people significantly prefer "reliability". Household with 3 and more people value "space" more, both taking 0.05 as a threshold.*
+
+Let's continue by computing the correlation matrix of the dataset. We do so using the `ggcorrplot` library. To see the actual numbers, you can run `cor(auto)`.
+
+```{r}
+ggcorrplot(cor(auto), show.diag=FALSE, hc.order = TRUE, title='Correlation Matrix')
+```
+
+**Question 3.** Are there any significant correlations between variables? How are the performance of K-Means and Hierarchical Clustering (the two methods we will explore in this assignment) affected by correlation between variables?
+
+**Answer 3.** *There are significant correlations between variables. For example, the feature sporty and power are highly positively correlated, which indicates that people who prefer vehicles with higher power capacity also seem to prefer sporty cars. By contrast, driving_properties and space are highly negatively correlated, which means people who care about driving_properties do not care about space that much. When there is correlation, the two methods may not perform so good (consider the case we discussed in the lecture). They will mistakenly form clusters based solely on distance rather than distinct, meaningful groups.*
+
+------------------------------------------------------------------------
+
+**Question 4.** Recall from lecture that normalization of the data is key to successful clustering. In this analysis, we will choose to not normalize our data prior to clustering. Why is this a valid approach for this problem?
+
+**Answer 4.** *Because all of our variables in this analysis is a binary variable, which contains only 0 or 1. This makes the difference in scale between different variables very small, which lessens our need for normalization.*
+
+## (b) K-Means with 3 Clusters [10 Points]
+
+Let's start by running K-Means clustering with 3 clusters.
+
+```{r}
+set.seed(15071)
+
+km = kmeans(auto, centers = 3) 
+kmeans.3 = km$cluster
+
+table(kmeans.3)
+```
+
+To better interpret the clusters, let's compute for of the 3 clusters the *mean* of the 13 independent variables.
+
+```{r}
+round(sapply(split(auto, kmeans.3), colMeans), 2)
+```
+
+Let's visualize these means better with a heatmap. In all heatmaps throughout this assignment, **darker values represent larger numbers in each ROW.** Note that the order of the labels on the y-axis of the heatmap are flipped from the table above.
+
+```{r}
+blues9 <- colorRampPalette(brewer.pal(9, "Blues"))(100)
+
+clusterMeans <- sapply(split(auto, kmeans.3), colMeans)
+
+heatmap(clusterMeans, col = blues9, scale="row", 
+        main="K-Means with 3 Clusters", Rowv = NA, Colv = NA, 
+        xlab = "Cluster Assignment", margins=c(3,8))
+```
+
+**Question 5.** Interpret these 3 clusters by answering the following questions.
+
+-   What is the overall size of each cluster?
+
+-   What is the demographic makeup of each cluster?
+
+-   Which vehicle characteristics are the most important or least important to each cluster?
+
+-   How might you market automobiles differently to people in each cluster?
+
+**Answer 5.**
+
+-   *The overall size of each cluster* *is 255, 301, and 237, respectively.*
+
+-   *Cluster 1: 7% are female and 58% are family with at least 3 people.*
+
+    *Cluster 2: 4% are female and 61% are family with at least 3 people.*
+
+    *Cluster 3: 8% are female and 59% are family with at least 3 people.*
+
+    *Cluster 1 and cluster 3 are quite similar in demographic characteristics, both with relatively higher proportion of female and lower proportion of family with 3 and above. Besides, cluster 3 has a higher proportion of family with 3 and above and proportion of female compared to cluster 1. However, cluster 2 shows a different composition with higher ratios of family with 3 and above and lower ratios of female.*
+
+-   *For cluster 1,"reliability" (0.5) and "driving_properties"(0.5) are the most important features while "comfort" (0.00) is the least important. For cluster 2, "power"(0.95) is the most important feature, however, "space"(0.10) the least important. For cluster 3, "comfort"(1.00) is the most important, "handling"(0.17) is the least important.*
+
+-   *Marketing strategies can be tailored based on the top characteristics for each cluster. For example, for cluster 1 which focused on “driving_properties” and “reliability”, emphasize the car's driving experience and reliability. For cluster 2 that values “power”, highlight performance with good engines. For cluster 3 prioritizing “comfort”, showcase the spacious, comfortable, and beautiful vehicles. At the same time, avoid wasting time on introducing features that customers in each cluster are not interested.*
+
+## (c) Choosing the Number of Clusters [5 Points]
+
+In part (b), we simply chose $k = 3$ clusters, but we could have chosen any number of clusters $k$. Let's use a scree plot to decide how many clusters to choose. For each $k$, the scree plot shows the total sum of squared distances of all points within the same cluster.
+
+```{r}
+k.results <- data.frame(k = 1:100)
+
+k.results$sum_squared_distances <- sapply(k.results$k, function(k) {
+  kmeans(auto, centers=k, iter.max=5000)$tot.withinss
+})
+
+plot(k.results$k, k.results$sum_squared_distances, type="l", 
+     xlab="Number of Clusters (k)", ylab=" Within Cluster Sum of Squares", 
+     main="Scree Plot for K-Means")
+```
+
+**Question 6.** Discuss the trade-offs between choosing a large $k$ and a small $k$. Which value of $k$ would you choose given the above scree plot?
+
+**Answer 6.** *Choosing a larger k can capture finer details but may lead to higher computational complexity and lower interpretability, while a smaller k simplifies the model but risks missing important patterns and combining dissimilar points together. Based on the scree plot, the “elbow” appears around 10 to 15, so I would recommend choosing 10 to 15 as the value of k to balance.*
+
+## (d) Comparing 3 and 10 Clusters [10 Points]
+
+Let's try running k-means with 10 clusters and plotting the same visualization.
+
+```{r}
+set.seed(15071)
+
+km = kmeans(auto, centers = 10) 
+kmeans.10 = km$cluster
+
+clusterMeans = sapply(split(auto, kmeans.10), colMeans)
+heatmap(clusterMeans, col = blues9, scale="row", 
+        main="K-Means with 10 Clusters", Rowv = NA, Colv = NA, 
+        xlab = "Cluster Assignment", margins=c(3,8))
+```
+
+**Question 7**. How might you interpret clusters 4 and 8 in `kmeans.10`?
+
+**Answer 7.** *Cluster 4 mainly consist of those who value "space" and "interior", while neglects "handling" and "power" somehow, with a relatively moderate ratio of female and family with 3 and above. It might include potential buyers that are family-oriented that value the space capacity. Customers in cluster 8 value "consumption" and "handling" most, while do not value "space" and "reliability" relatively, with a higher ratio of male, which may indicate that the pursue the good performance of a car.*
+
+Let's examine how these 10 clusters relate to the original 3 clusters. Let's run the `table` command, which counts the number of data points that was assigned to a particular cluster in `kmeans.3` and `kmeans.10`. For example, there are 63 customers assigned to cluster 1 in both `kmeans.3` and `kmeans.10`, while there were 60 customers assigned to cluster 1 in `kmeans.3` and cluster 6 in `kmeans.10`.
+
+```{r}
+table(kmeans.3, kmeans.10)
+```
+
+We can visualize how the 3 clusters differ from the 10 clusters with a heatmap.
+
+```{r}
+purples <- colorRampPalette(brewer.pal(9, "Purples"))(100)
+
+heatmap(table(kmeans.3, kmeans.10), col = purples, scale="col", 
+        main="Differences between 3 and 10 Clusters", Rowv = NA, Colv = NA, 
+        xlab = "Cluster Assignment", margins=c(3,0))
+```
+
+**Question 8.** Discuss the relationship between the cluster assignments from `kmeans.10` and `kmeans.3`. As a concrete example, provide an interpretation of clusters 3 and 4 in `kmeans.10` and how they relate to cluster 3 in `kmeans.3`.
+
+**Answer 8.** *The relationship between the cluster assignments from kmeans.10 and kmeans.3 shows how the more granular 10-cluster solution aligns with the broader 3-cluster structure. In general, each of the 3 main clusters from kmeans.3 is divided into multiple smaller clusters in kmeans.10, indicating that the 10-cluster solution captures more specific variations within each larger group. Overall, Cluster 1 in kmeans.3 largely corresponds to Clusters 1, 6, 7, and 9 in kmeans.10, while Cluster 2 in kmeans.3 aligns with Clusters 2, 5, 7, 8, and 10 in kmeans.10. Similarly, Cluster 3 in kmeans.3 mostly maps to Clusters 3 and 4 in kmeans.10.* *In kmeans.10, cluster 3 emphasizes "comfort" and "technology" and cluster 4 emphasizes "space" and "interior". They can be seen as a split of cluster 3 in kmeans.3 as they share many similarities, such as the features "power", "handling", "reliability", and "comfort". But kmeans.10 is more detailed within the group, divided into more internal categories.*
+
+## (e) Hierarchical Clustering [10 Points]
+
+Now, let's try hierarchical cluster instead of k-means. First, let's build a dendrogram using the `hclust` function applied to `dist(auto)`, which captures the Euclidean distances between each pair of customers. Use `method="ward.D2"` metric to determine cluster similarity (you do not need to understand this).
+
+```{r}
+set.seed(15071)
+
+hclust.tree <- hclust(dist(auto), method="ward.D2")
+plot(hclust.tree, ylab=NA, xlab=NA)
+```
+
+hclust(dist(auto), method="ward.D2")
+
+Let's cut the dendrogram at a certain height to give rise to 3 clusters using the `cutree` function.
+
+```{r}
+hclust.3 <- cutree(hclust.tree, 3)
+
+clusterMeans = sapply(split(auto, hclust.3), colMeans)
+heatmap(clusterMeans, col = blues9, scale="row", 
+        main="Hierarchical Clustering with 3 Clusters", Rowv = NA, 
+        xlab = "Cluster Assignment", margins=c(3,0))
+```
+
+Note that there is a dendrogram at the top of the heatmap.
+
+**Question 9.** Provide an interpretation of these 3 clusters. Are they similar to those from K-Means in `kmeans.3`? If we were to use hierarchical clustering with 2 clusters (i.e., `cutree(hclust.tree, 2)`), what would those two clusters be?
+
+**Answer 9.** *The three clusters identified by hierarchical clustering provide insights into distinct customer preferences. Cluster 1: Emphasizes “driving properties”, "handling", "power", and "sporty", suggesting this group values advanced driving features and vehicle performance. Cluster 2: Shows high emphasis on “handling”, “reliability”, “comfort”, and "safety", indicating a preference for stable, dependable, and comfortable vehicles. Cluster 3: Focuses on “consumption”, "space", and "interior", suggesting a family-oriented group that values spacious and energy-saving vehicles suitable for household needs. The result of it is quite similar to that of K-Means in kmeans.3. If use hierarchical clustering with 2 clusters, then cluster 1 and cluster 3 would become 1 cluster, while cluster 2 stays the same. One prefers "safety", "reliability", and "comfort". The other prefers "sporty", "consumption", and "driving properties" etc.*
+
+Similar to before, let's also try cutting the tree to generate 10 clusters and compare it to 3 clusters.
+
+```{r}
+hclust.10 <- cutree(hclust.tree, 10)
+clusterMeans = sapply(split(auto, hclust.10), colMeans)
+
+heatmap(clusterMeans, col = blues9, scale="row", 
+        main="Hierarchical Clustering with 10 Clusters", Rowv = NA, Colv=NA,
+        xlab = "Cluster Assignment", margins=c(3,0))
+```
+
+Here is the table showing the relationship between clusters in `hclust.3` and `hclust.10`.
+
+```{r}
+table(hclust.3, hclust.10)
+```
+
+**Question 10.** Using the table above, discuss the hierarchical structure of these 10 clusters. How does this table compare to the one from question 8 for K-Means?
+
+**Answer 10.** *In hclust.3, Cluster 1 corresponds to Clusters 1, 2, and 3 in hclust.10; Cluster 2 aligns with Clusters 4, 9, and 10 in hclust.10; and Cluster 3 in hclust.3 maps to Clusters 5, 6, 7, and 8 in hclust.10.* *The hierarchical structure of these 10 clusters appears more organized and cleaner compared to the K-Means clustering from Question 8. In hierarchical clustering, each cluster builds on a more structured, nested organization of groups, which results in no overlap and clear boundaries between clusters. Unlike K-Means, where clusters may have more mixed memberships, the hierarchical clustering table shows a more distinct separation, with each cluster containing a more homogeneous set of characteristics.*
+
+# Problem 2: Text Analytics for Predicting Airbnb Review Scores [50 Points]
+
+Airbnb is a platform that allows users to list their homes for short-term lease or rental (called a listing), and allows other users to reserve lodging. Users who reserve lodging are able to leave a review on the Airbnb website and rate their stay after its completion. The dataset `airbnbReviews.csv` contains a subset of reviews written for listings in New York City between March 2011 and March 2018, as well as the associated ratings. The variables in the dataset are described as follows:
+
+-   `listing_id`: an integer key associated with the listing
+-   `id`: an integer key associated with the review
+-   `date`: the date of the review in the format YYYY-MM-DD
+-   `reviewer_id`: an integer key associated with the reviewer
+-   `reviewer_name`: the first name of the reviewer
+-   `comments`: the text of the review
+-   `review_scores_rating`: the score that the reviewer gave the listing, with 1 corresponding to one star, and 5 corresponding to five stars
+
+The goal of this problem is for you to analyze the text of reviews and to build a model to predict the review score.
+
+```{r}
+library(tm)
+library(SnowballC)
+library(caret)
+library(rpart.plot)
+library(rpart)
+library(pROC)
+
+reviews = read.csv("airbnbReviews.csv", stringsAsFactors = FALSE)
+```
+
+## (a) Exploratory Analysis and Feature Engineering [5 Points]
+
+For each of the five review scores (1,2,3,4,5), how many reviews in the dataset have this review score? Fill in your code using the `table` function below.
+
+```{r}
+table(reviews$review_scores_rating)
+```
+
+We see that the reviews are highly concentrated at 5 out of 5. To make the prediction task more interesting, rather than predicting the rating (1-5), let's try to predict whether a review is a 5 star or not a 5 star. Add a new column to the dataset called `is_five`. We'll use TRUE for 5 star ratings, and FALSE for 1-4 star ratings.
+
+```{r}
+reviews$is_five <- reviews$review_scores_rating==5
+table(reviews$is_five)
+```
+
+Also, create a column called `num_characters` in the dataset that contains the character length of each review using the `nchar` function on `reviews$comments`.
+
+```{r}
+reviews$num_characters <- nchar(reviews$comments)
+summary(reviews$num_characters)
+```
+
+## (b) Text Cleaning [10 Points]
+
+Now, let's clean up our text using the `tm_map` function, which applies transformations to a corpus of reviews. Fill in the code below to apply the following:
+
+1.  Convert all text to lowercase (`tolower`)
+
+2.  Remove punctuation (`removePunctuation`)
+
+3.  Remove stopwords (`removeWords`, `stopwords("english")`)
+
+4.  Stem words(`stemDocument`)
+
+After you add each transformation, you can run the code `content(corpus[[1]])` to examine how the text of the first review has changed. You can safely ignore any red warnings you encounter in the code while adding these transformations (e.g., "transformation drops documents").
+
+```{r}
+corpus <- Corpus(VectorSource(reviews$comments))
+
+corpus <- tm_map(corpus, tolower)
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+corpus <- tm_map(corpus, stemDocument)
+
+content(corpus[[1]])
+```
+
+**Question 11.** What information might we lose by applying the 4 text cleaning steps above? Pick two of the four steps and provide a specific example for each.
+
+**Answer 11.** *Converting to Lowercase: We lose information related to proper nouns or acronyms, which could indicate specific names or brands. For example, “MIT” would be treated the same as “mit,” losing its distinction as a specific institution. Stemming Words: Stemming can cause words to lose their original form, making them harder to interpret. For instance, “running” would be reduced to “run,” which removes the context of tense or form, potentially affecting the meaning of the text.*
+
+## (c) Bag of Words Representation [5 Points]
+
+Now, let's create our data matrix where each row is an Airbnb review and each column is the *count* of the number of times that word appears in that review. This is called the bag of words representation of a set of text documents, and the matrix is called the Document Term Matrix. In this matrix, each row is document (i.e., an Airbnb review) and the columns are the terms (i.e., vocabulary words). Note that we use "word" and "term" interchangeably.
+
+```{r}
+doc_terms <- DocumentTermMatrix(corpus)
+dim(doc_terms)
+```
+
+To get a better sense of what `doc_terms` looks like, let's take a look at its first 5 rows (reviews) and first 10 columns (terms).
+
+```{r}
+inspect(doc_terms[1:5, 1:10])
+```
+
+**Filtering Low Frequency Words.** Our corpus at this point should still contain words that are very specific (e.g., “turquoise”, “b43”, or hosts’ first names) and not helpful due to their specificity. Let us restrict our attention only to words that occur more frequently. Let's remove words/terms that occur in less than 1% of the reviews. We do this using the `removeSparseTerms` function.
+
+```{r}
+doc_terms_freq = removeSparseTerms(doc_terms, 0.99)
+doc_terms_freq = data.frame(as.matrix(doc_terms_freq))
+dim(doc_terms_freq)
+```
+
+**Question 12.** What percent of the words were removed by our frequency filter? Why is it good practice to remove words which appear infrequently in our corpus?
+
+**Answer 12.** *After frequency filter, the number of words dropped from 7040 to 406, which accounts for 94.23%. Removing infrequently occurring words is good practice because such words contribute little to the overall patterns in the data and can add noise, making the model more complex without improving predictive power. By focusing on more common words, we can create a cleaner, more generalizable model that captures the main themes and sentiments of the text. Also, we can reduce computation time by doing so.*
+
+## (d) Building Models [25 Points]
+
+Let's start building a predictive model. First, let's put the dependent variable as well as our `num_characters` variable into a single dataframe.
+
+```{r}
+reviews_data <- doc_terms_freq
+reviews_data$is_five = factor(reviews$is_five)
+reviews_data$num_characters = reviews$num_characters
+
+head(reviews_data)
+```
+
+Next, we split the dataframe into a test set and training set. Let's do the split so that the training set is comprised of all of the reviews from before June 30, 2017, and your test set is comprised of all of the reviews from July 1, 2017 onwards.
+
+```{r}
+set.seed(0) 
+
+train = reviews_data[as.Date(reviews$date) <= as.Date("2017-06-30"), ]
+test = reviews_data[as.Date(reviews$date) > as.Date("2017-06-30"), ]
+
+dim(train)
+```
+
+**CART Model.** Construct a CART model with using `rpart` with `cp = 0.01` and show a plot of it using `prp`.
+
+```{r}
+tree = rpart(is_five ~ ., data = train, cp = 0.01)
+prp(tree)
+```
+
+**Question 13.** Provide an interpretation of the CART model above. When does the model predict a 5 star review?
+
+**Answer 13.** *The CART model predicts a 5-star review (TRUE) based on the presence or absence of certain words in the review text. If the word “howev” appears at least once in the review (howev \>= 1), the model predicts FALSE (not a 5-star review). If “howev” does not appear, it checks for the word “recommend”. If “recommend” appears at least once (recommen \>= 1), the model predicts TRUE (5-star review). If “recommend” does not appear, the model then checks for the word “small”. If “small” does not appear (small \< 1), it predicts TRUE (5-star review). If “small” appears at least once, it checks for the word “perfect”. If “perfect” appears less than once (perfect \< 1), it predicts FALSE; otherwise, it predicts TRUE. In summary, the model predicts a 5-star review when “however” is absent and specific words like “recommend” or “perfect” follow certain patterns that typically indicate a positive review.*
+
+------------------------------------------------------------------------
+
+**Logistic Regression.** Let's now construct a logistic regression model and print out the coefficients with at least two stars. We do this by filtering for coefficients with a p-value less than 0.01 and ordering them in ascending order of the coefficient estimate.
+
+```{r}
+logreg = glm(is_five ~ ., data=train, family="binomial")
+
+coeff_table <- summary(logreg)$coefficients
+
+significant_coefs = coeff_table[coeff_table[, "Pr(>|z|)"] < 0.01, ]
+significant_coefs[order(significant_coefs[, 'Estimate']), ]
+```
+
+**Question 14.** Comment briefly on the coefficients of the logistic regression model above. Are there any surprising coefficients?
+
+**Answer 14.** *The coefficients of the logistic regression model indicate the impact of specific words on the likelihood of a 5-star rating. Positive coefficients (e.g., “ever,” “incred,” “amaz”) suggest that these words increase the likelihood of a 5-star rating, while negative coefficients (e.g., “heat,” “wasnt,” “connect”) decrease it. It’s somewhat surprising to see words like “ever” and “see” with strong positive coefficients, as these words can have neutral or even negative connotations depending on the context. Also, it is also surprising that words like "heat" and "warm" have negative effects, which should have some positive meanings.*
+
+Finally, let's calculate the out-of-sample AUC of our logistic regression model.
+
+```{r}
+test_predictions <- predict(logreg, newdata=test, type="response")
+
+roc_curve <- roc(test$is_five, test_predictions)
+
+plot(roc_curve, 
+     main = paste("ROC Curve with AUC =", round(auc(roc_curve), 3)), 
+     col = "blue", 
+     lwd = 2, 
+     xlab='False Positive Rate (FPR)', 
+     ylab='True Positive Rate (TPR)',
+     xlim=c(1, 0),
+     asp = NA ,
+     legacy.axes = TRUE)
+```
+
+**Question 15.** Comment on the performance of logistic regression using this bag of words representation of text. For many applications, bag of words works quite well despite its simplistic concept. Can you think of examples when the bag of words representation might fail? What might you do to improve upon bag of words?
+
+**Answer 15.** *The ROC curve shows an AUC of 0.695, indicating moderate performance of the logistic regression model using the bag of words representation, but not a great performance. Bag of words may struggle with phrases where word order is critical for meaning, such as “not good” versus “good.” Additionally, bag of words is ineffective with sarcasm or nuanced expressions, where the true sentiment depends on context rather than the words alone. To improve upon bag of words, we could use more sophisticated models like word embeddings (e.g., Word2Vec, GloVe) or transformers (e.g., BERT) that capture context and semantic relationships, providing a richer representation of text data.*

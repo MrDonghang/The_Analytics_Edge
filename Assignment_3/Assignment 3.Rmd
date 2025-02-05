@@ -1,0 +1,544 @@
+---
+title: "15.071 Fall 2024 Assignment 3"
+subtitle: "CART for Classification, Random Forest and Boosting"
+author: "Donghang Li" 
+date: "Due: October 16, 2024"
+output: html_notebook
+---
+
+This homework assignment consists of 2 problems:
+
+-   **Problem 1: CART for Classification**: We continue using the dataset from the framingham heart study, this time training various CART models to predict which patients will develop CHD.
+-   **Problem 2: Random Forest:** We revisit the Ames housing prediction problem with a larger dataset with more features. We construct random forest and boosted tree models to predict SalePrice while performing cross validation to optimize the model parameters.
+
+Load all libraries first (don't forget to run this). This cell won't appear in the preview.
+
+```{r echo=FALSE}
+library(caTools)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(pROC)
+library(ggplot2)
+library(randomForest)
+library(gbm)
+library(caret)
+library(dplyr)
+```
+
+# Problem 1: CART for Classification (50 Points)
+
+This problem is a continuation of Problem 3 of Assignment 2, which was concerned with predicting whether a patient will experience coronary heart disease (CHD) within 10 years of their first examination. Last time, you constructed a logistic regression model to predict CHD using the dataset in the file `framingham.csv`. This week, you will construct and evaluate a CART classification tree to predict CHD using the same dataset. Recall that in this dataset, each row corresponds to a patient in the Framingham Heart Study. The dependent variable of interest is `TenYearCHD`, which is 1 if the patient got CHD in 10 years, and 0 otherwise. The independent variables consist of demographic, medical and lifestyle characteristics of the individual, including age, education, cigarettes per day, blood pressure, bmi...etc.
+
+```{r}
+framingham <- read.csv('framingham.csv', stringsAsFactors = TRUE)
+framingham$TenYearCHD = factor(framingham$TenYearCHD)
+
+set.seed(100) 
+N <- nrow(data)
+idx = createDataPartition(framingham$TenYearCHD, p=0.7, list=FALSE)
+train <- framingham[idx, ]
+test <- framingham[-idx, ]
+
+head(train)
+```
+
+## (a): CART with No Loss Matrix (15 Points)
+
+Let's start by training a simple CART model with a `cp` value of 0.008 and not specifying a loss matrix. If we do not specify a loss matrix, CART will treat false positives and false negatives equally. Note that throughout this problem, we will say that predicting 1 is positive and 0 is negative.
+
+```{r}
+cart_equal_loss = rpart(TenYearCHD~., 
+                   data = train, 
+                   cp=0.008)
+prp(cart_equal_loss)
+```
+
+**Question 1.** Provide an interpretation of the tree above. Under what conditions does the tree predict that a patient will develop CHD in 10 years?
+
+**Answer 1.** *The CART predicts whether a patient will develop CHD in 10 years based on several factors, including age, sysBP, glucose levels, and gender. If the patient is younger than 49 years old, the tree predicts that they will not develop CHD. For patients aged 49 or older, the tree first evaluates their sysBP. If it is below 155, the glucose level is checked: patients with glucose levels under 173 are predicted not to develop CHD, while those with glucose levels 173 or higher are predicted to develop CHD. If the systolic blood pressure is 155 or higher, the prediction depends on gender: for females, if sysBP is between 155 and 197, the tree predicts no CHD development and if sysBP is 197 or higher it will predict CHD development. While for males, the glucose level is checked again. Male patients with glucose levels 92 or higher are predicted to develop CHD, and glucose levels lower than 92 are predicted not to develop CHD. In summary, the tree predicts CHD development for patients who are 49 or older with specific combinations of high systolic blood pressure and elevated glucose levels.*
+
+Now, let's visualize the tree in a bit more detail. Run the following code with `extra=107`.
+
+```{r}
+prp(cart_equal_loss, extra=107, digits=2)
+```
+
+The visualization above shows a bit more detail into the tree `cart_no_loss`. At each leaf node, the bottom number (shown as a percent) represents the percent of patients in the [training]{.underline} dataset at that node. The top number (shown as a decimal) is the proportion of those patients who developed CHD.
+
+**Example.** For example, the leaf node with patients whose age is less than 49 has the numbers 0.07 and 49%,. This bucket contains 49% of all patients in the training dataset, and out of this 49% it is the case that 7% of them developed CHD.
+
+**Question 2**. Which leaf node above has the highest proportion of patients with CHD? What percent of patients in the training dataset does this model predict will develop CHD?
+
+**Answer 2.** *The seventh node (from left to right) has the highest proportion of patients with CHD, the number being 0.79. The model predict that 2% percent of the patients (0% + 1% + 1%) will develop CHD.*
+
+------------------------------------------------------------------------
+
+**Question 3**. Fill in the blank and [justify]{.underline} your answer.
+
+For a leaf node where $p$ proportion of patients develop CHD, `cart_equal_loss` makes a prediction of 1 for patients in that leaf node if $p$ is greater than \_[0.5]{.underline}\_\_.
+
+**Answer 3.** *Supposing that both FP and FN has an equal loss of 1, the expected cost of FP equals to (1-p) and the expected cost of FN equals to p. If we want to make a prediction of 1, we want to make sure the expected cost of FP is less than that of FN, that is 1-p \< p. We can conclude that we can make a predication of 1 if p is greater than 0.5.*
+
+## (b) Adding in a Loss Matrix (10 Points)
+
+As we discussed in the previous assignment, incorrectly classifying a person who gets CHD (False Negatives) is more costly than incorrectly classifying a person who doesn’t get CHD (False Positives). We will incorporate the loss matrix in our training of the CART model, by setting losses for false positives as 1 and false negatives as 5. Let's use a cp value of `0.01` here.
+
+```{r}
+LossMatrix = matrix(0,2,2)
+
+LossMatrix[1,2] = 1
+LossMatrix[2,1] = 5
+
+cart_with_loss = rpart(TenYearCHD~., 
+                   data = train, 
+                   parms=list(loss=LossMatrix),
+                   cp=0.01)
+prp(cart_with_loss, extra=107, digits=2)
+```
+
+**Question 4.** What percent of all patients in the training set does `cart_with_loss` predict will develop CHD? Between `cart_with_loss` and `cart_equal_loss`, which one do you expect will have a higher false positive rate on the testing dataset? Why?
+
+**Answer 4.** *The model cart_with_loss predict that 32 percent of all patients in the training set (17% + 8% + 7%) will develop CHD. I think cart_with_loss will have a higher false positive rate on the testing dataset, because we are setting the loss matrix about higher costs of false negatives, the model will inevitably prefer making positive predictions and mistakenly predict the negative samples as positive ones, thus resulting in higher false positive rate.*
+
+------------------------------------------------------------------------
+
+**Question 5**. For a leaf node where \$p\$ proportion of patients develop CHD, `cart_with_loss` makes a prediction of 1 for patients in that leaf node if \$p\$ is greater than \_[0.167]{.underline}\_\_.
+
+**Answer 5.** *Under this circumstance, the expected cost of FP equals to (1-p) and the expected cost of FN equals to 5p. If we want to make a prediction of 1, we want to make sure the expected cost of FP is less than that of FN, that is 1-p \< 5p. We can conclude that we can make a predication of 1 if p is greater than 0.167.*
+
+## (c) Cross Validation to Optimize cp (15 Points)
+
+For the rest of this problem, let's continue to use this 5:1 cost of false negatives to false positives.
+
+To find a `cp` that performs well out-of-sample, let's run 10-fold cross validation on `cp` candidate values ranging from 0.001 to 0.02 in increments of 0.001 (that is, `seq(0.001, 0.02, 0.001)`). Then, let's plot the average accuracy across the 10 folds for each of our `cp` candidate values.
+
+```{r}
+set.seed(101)
+
+LossMatrix = matrix(0,2,2)
+LossMatrix[1,2] = 1
+LossMatrix[2,1] = 5
+
+cv.trees = train(
+  y = train$TenYearCHD,
+  x = subset(train, select = -c(TenYearCHD)),
+  method = "rpart",
+  parms=list(loss=LossMatrix),
+  trControl = trainControl(method="cv", number=10),
+  tuneGrid = data.frame(.cp = seq(0.001, 0.02, 0.001) ))
+
+plot(cv.trees$results$cp, cv.trees$results$Accuracy,xlab = "cp", ylab = "Accuracy")
+```
+
+**Question 6.** Comment on the graph above. Is this what you expected to see? What is the best cp value? Is it guaranteed that this cp value will achieve the best accuracy on the testing data?
+
+**Answer 6.** *The graph shows the relationship between the complexity parameter (cp) and the accuracy of the model. As cp decreases, the model becomes more complex, and initially, accuracy increases. However, after reaching a peak, accuracy starts to decline as cp becomes smaller. This pattern is expected. At first, a smaller cp allows the model to better capture patterns in the training data, leading to improved accuracy. However, as cp continues to decrease, the model may become too complex and overfit the data, causing a reduction in accuracy. On the other hand, when cp is too large, the model is too simple (over-pruned), leading to underfitting and lower accuracy.* *The best cp value appears to be 0.003, where the model achieves the highest accuracy.* *However, it is not guaranteed that this cp value will achieve the best accuracy on testing data. The accuracy in this plot likely comes from cross-validation or a validation set. While this cp value performs well on training/validation data, it may not generalize as well to unseen testing data due to the potential for overfitting or underfitting.*
+
+------------------------------------------------------------------------
+
+**Question 7.** What would be the pros and cons of running 100-fold cross validation instead of 10-fold cross validation? Explain your reasoning.
+
+**Answer 7.** *Running 100-fold cross-validation instead of 10-fold cross-validation has both advantages and disadvantages. The primary benefit is that 100-fold cross-validation reduces the variance in performance estimates, providing a more stable and precise evaluation of the model’s generalization ability. This is because each fold contains a larger proportion of the data for training, leading to a more diverse set of training samples. However, the downside is the significantly increased computational cost, as the model needs to be trained 100 times instead of 10, which can be time-consuming, especially for large datasets or complex models. Additionally, the improvement in performance estimation is often marginal compared to 10-fold cross-validation, which already provides a good balance between accuracy and efficiency. Therefore, while 100-fold cross-validation offers more precision, the computational cost may not be justified in most practical cases.*
+
+## (d) Best Tree and Performance Comparison (10 Points)
+
+Let's visualize the best tree. Take the optimal cp value from the 10-fold cross validation (you can look at the graph, or run `cv.trees$bestTune`). Create a new CART model with that cp value and plot it (with `extra=107`) as we did before.
+
+```{r}
+cv.trees$bestTune
+```
+
+```{r}
+best_cart = rpart(TenYearCHD~., 
+                   data = train, 
+                   parms=list(loss=LossMatrix),
+                   cp=0.003)
+prp(best_cart, extra=107, digits=2)
+```
+
+**Probabilities with CART.** While we typically think of CART as providing a 0/1 prediction, CART can also provide probabilities (similar to Logistic Regression). For all patients in a particular leaf node, CART predicts a probability of CHD equal to the *proportion of patients* in that leaf node with CHD. For example, if a leaf node contains 10 patients with CHD and 90 patients without CHD from the training dataset, then all patients assigned to that node in the testing set will be predicted to have a 10% probability of CHD.
+
+Using such probabilties, we can plot and calculate the AUC of our CART model. The code below extracts the probabilities from CART.
+
+```{r}
+cart_probs = predict(best_cart, newdata=test, type = 'prob')[, 2]
+head(cart_probs)
+```
+
+Let's compare this to a Logistic Regression's probabilities. Train a logistic regression model on our training data and and use it to make predictions on the testing data.
+
+```{r}
+lr_model = glm(TenYearCHD~., data=train, family="binomial")
+lr_probs = predict(lr_model, newdata=test, type='response')
+```
+
+Let's plot the ROC curves and calculate the AUC of both models. You do not need to understand the code below for plotting.
+
+```{r}
+roc_lr <- roc(test$TenYearCHD, lr_probs)
+roc_cart <- roc(test$TenYearCHD, cart_probs)
+baseline_roc <- data.frame(fpr = c(0, 1), tpr = c(0, 1))
+
+ggplot() +
+  geom_line(data = data.frame(fpr = 1 - roc_lr$specificities, tpr = roc_lr$sensitivities), 
+            aes(x = fpr, y = tpr), color = 'blue', size = 1.2) +
+    geom_line(data = data.frame(fpr = 1 - roc_cart$specificities, tpr = roc_cart$sensitivities), 
+            aes(x = fpr, y = tpr), color = 'green', size = 1.2) +
+    geom_line(data = baseline_roc, aes(x = fpr, y = tpr), color = 'red', linetype = "dashed", size = 1.2) +
+    labs(x = "False Positive Rate", y = "True Positive Rate", title = "ROC Curves for Models") +
+    annotate("text", x = 0.75, y = 0.25, label = paste("Logistic Regression AUC =", round(auc(roc_lr), 3)), color = 'blue') +
+  annotate("text", x = 0.75, y = 0.15, label = paste("CART AUC =", round(auc(roc_cart), 3)), color = 'green') +
+  annotate("text", x = 0.75, y = 0.05, label = "Baseline (AUC = 0.5)", color = 'red') +
+  theme_minimal()
+```
+
+**Question 8.** : Comment on ROC curves and the AUC values above. Overall, which model (logistic regression or CART) would you think is more useful to a doctor or medical practitioner?
+
+**Answer 8.** *The ROC curve for logistic regression (blue) shows a higher true positive rate across different false positive rates compared to the CART model (green), indicating better performance. The AUC (Area Under the Curve) for logistic regression is 0.741, which is higher than CART’s AUC of 0.63, suggesting that logistic regression has a better ability to distinguish between patients who will develop CHD and those who will not. The baseline model, represented by the red dashed line, has an AUC of 0.5, which indicates random guessing. Given the higher AUC and overall better ROC curve, logistic regression would likely be more useful to a doctor or medical practitioner, as it provides more accurate predictions and better overall classification performance compared to the CART model.*
+
+------------------------------------------------------------------------
+
+# Problem 2: Random Forest and Boosting (80 Points)
+
+In this problem, we will look at a more comprehensive version of the Ames, Iowa Housing Prices dataset. Recall that the dataset describes sales of 2,830 properties in the town of Ames, Iowa, from 2006 to 2010. In Homework 2, we modeled housing prices using 11 independent variables. The expanded dataset in this assignment contains 23 variables, some of which are numerical and others are categorical.
+
+The variables included in the amended dataset are described in **Table 2**. These variables describe the nature of the home in both quantitative terms (square feet, lot size, number of rooms, etc.) and qualitative terms (building materials used, garage type, home style, etc.).
+
+#### Table 2: Ames dataset variables
+
+| Variable     | Description                                            |
+|--------------|--------------------------------------------------------|
+| LotArea      | Lot size in square feet                                |
+| BldgType     | Type of dwelling                                       |
+| HouseStyle   | Style of dwelling                                      |
+| YearBuilt    | Original construction date                             |
+| YearRemodAdd | Remodel date                                           |
+| RoofStyle    | Type of roof                                           |
+| BsmtFinSF1   | Type 1 finished square feet                            |
+| BsmtUnfSF    | Unfinished square feet of basement area                |
+| Electrical   | Electrical system                                      |
+| GrLivArea    | Above ground living area square feet                   |
+| FullBath     | Full bathrooms above grade                             |
+| HalfBath     | Half baths above grade                                 |
+| BedroomAbvGr | Number of bedrooms above basement level                |
+| TotRmsAbvGrd | Total rooms above grade (excluding bathrooms)          |
+| Fireplaces   | Number of fireplaces                                   |
+| GarageYrBlt  | Year garage was built                                  |
+| GarageCars   | Size of garage in car capacity                         |
+| GarageArea   | Size of garage in square feet                          |
+| WoodDeckSF   | Wood deck area in square feet                          |
+| OpenPorchSF  | Open porch area in square feet                         |
+| PoolArea     | Pool area in square feet                               |
+| YrSold       | Year Sold                                              |
+| SalePrice    | The property’s sale price in dollars (target variable) |
+
+Let's load our datasets, perform the usual train/test split, and define the functions `calculate_r2` and `calculate_osr2` for use later.
+
+```{r}
+set.seed(0)
+
+ames <- read.csv('AmesExtended.csv', stringsAsFactors = TRUE)
+idx = createDataPartition(ames$SalePrice, p=0.7, list=FALSE)
+
+ames_train = ames[idx, ]
+ames_test = ames[-idx, ]
+
+calculate_r2 <- function(predictions) {
+  return(1 - sum((predictions - ames_train$SalePrice)^2) / sum((mean(ames_train$SalePrice) - ames_train$SalePrice)^2))
+}
+
+calculate_osr2 <- function(predictions) {
+  return(1 - sum((predictions - ames_test$SalePrice)^2) / sum((mean(ames_train$SalePrice) - ames_test$SalePrice)^2))
+}
+
+head(ames_train)
+```
+
+In this problem, we will build a large variety of models. We'll use the dataframe `results` to keep track of our model's performance.
+
+```{r}
+results <- data.frame(
+  name = c(NA, NA, NA, NA, NA, NA), 
+  r2 = c(NA, NA, NA, NA, NA, NA), 
+  osr2 = c(NA, NA, NA, NA, NA, NA)
+)
+
+results
+```
+
+## (a) Linear Regression (5 Points)
+
+Let's start with linear regression. Build a simple linear regression model and print out a summary of the model.
+
+```{r}
+lin_reg <- lm(SalePrice ~ ., data = ames_train)
+summary(lin_reg)
+```
+
+Use the code below to calculate the In-Sample R2 and out-of-sample R2, then append them onto `results`.
+
+```{r}
+results[1, ] <- data.frame(name='Linear Regression', 
+                              r2 = calculate_r2(predict(lin_reg, newdata=ames_train)),
+                              osr2 = calculate_osr2(predict(lin_reg, newdata=ames_test)))
+results
+```
+
+------------------------------------------------------------------------
+
+**Question 9.** : According to the linear regression model, what are some variables that affect a property's sale price?
+
+**Answer 9.** *Taking 0.05 as the threshold, LotArea, BldgType2fmCon, BldgTypeDuplex, BldgTypeTwnhs, BldgTypeTwnhsE, HouseStyle2.5Fin, HouseStyle2Story, YearBuilt, YearRemodAdd, BsmtFinSF1, BsmtUnfSF, GrLivArea, BedroomAbvGr, TotRmsAbvGrd, Fireplaces, GarageYrBlt, GarageCars, GarageArea, WoodDeckSF, PoolArea are the variables that can significantly affect a property's sale price.*
+
+## (b) CART (5 Points)
+
+Use 10-fold cross validation to find a CART model that has the optimal cp value. Test out cp values from 0.001 to 0.01 in increments of 0.001, i.e. `seq(0.001, 0.01, 0.001)`.
+
+```{r}
+cart.cv = train(
+  y = ames_train$SalePrice,
+  x = subset(ames_train, select = -c(SalePrice)),
+  method = "rpart",
+  trControl = trainControl(method="cv", number=10),
+  tuneGrid = data.frame(.cp = seq(0.001, 0.01, 0.001))
+  )
+
+cart.cv$bestTune
+```
+
+Using the optimal cross-validated `cp` value, train a CART model called `cart_best`. Let's add its performance to our dataframe `results`.
+
+```{r}
+cart_best = rpart(SalePrice ~ ., data=ames_train, cp=0.001)
+
+results[2, ] <- data.frame(name="CART with CV", 
+                              r2 = calculate_r2(predict(cart_best, newdata=ames_train)),
+                              osr2 = calculate_osr2(predict(cart_best, newdata=ames_test)))
+
+results
+```
+
+## (b) Random Forest (25 Points)
+
+Now, let's try a random forest model.
+
+### Default Values
+
+First, let's train a model with its default parameters and no cross validation for parameter tuning. This means that we will use the default values of the parameters `mtry`, `ntree` and `nodesize` by not explicitly setting them in the `randomForest` function. You can see what the default values are by running `?randomForest` in the terminal.
+
+```{r}
+set.seed(0)
+
+rf_model = randomForest(SalePrice~., data=ames_train)
+
+results[3, ] <- data.frame(name="Random Forest (Default)", 
+                              r2 = calculate_r2(predict(rf_model, newdata=ames_train)),
+                              osr2 = calculate_osr2(predict(rf_model, newdata=ames_test)))
+results
+```
+
+### Cross Validation
+
+Now, let's run cross validation to find the best value of mtry. Use 5-fold cross validation to find the best `cp` value out of the numbers from 3 to 18 in increments of 3 (i.e., `seq(3, 15, 3)`). Let's set the number of trees to be 100, to reduce the run-time.
+
+```{r}
+set.seed(0)
+
+rf.params = expand.grid(
+  mtry = seq(3, 18, 3)
+)
+
+rf.cv = train(
+  y = ames_train$SalePrice,
+  x = subset(ames_train, select = -c(SalePrice)),
+  method="rf",
+  ntree=100,
+  trControl=trainControl(method="cv", number=5),
+  tuneGrid=rf.params
+  )
+
+rf.cv$results
+```
+
+------------------------------------------------------------------------
+
+**Question 10.** In the code above, what is the total number of CART models that are fit? Show your work.
+
+**Answer 10.** *The total number of CART models are 3000 (6\*100\*5).*
+
+Let's take a look at how the value of `mtry` affects our cross-validated R2.
+
+```{r}
+plot(rf.cv$results$mtry, rf.cv$results$Rsquared)
+```
+
+------------------------------------------------------------------------
+
+**Question 11.**. Why is it important to tune mtry? (i.e., what happens if you set it too high or too low?)
+
+**Answer 11.** *If mtry is set too low, the model may not consider enough features at each split, leading to underfitting, as the model might not capture important patterns in the data. On the other hand, if mtry is set too high, the model may consider too many features at each split, reducing the diversity between the trees in the forest and potentially leading to overfitting. This reduces the Random Forest’s ability to generalize well to unseen data. Therefore, tuning mtry helps to balance bias and variance, ensuring the model is both accurate and robust.*
+
+Let's take this optimal value of mtry and create a final Random Forest model using it. Compute its performance and add it to the dataframe `results`.
+
+```{r}
+set.seed(0)
+
+rf_best = randomForest(SalePrice~., data=ames_train, mtry=12)
+
+results[4, ] <- data.frame(name="Random Forest with CV", 
+                              r2 = calculate_r2(predict(rf_best, newdata=ames_train)),
+                              osr2 = calculate_osr2(predict(rf_best, newdata=ames_test)))
+results
+```
+
+Finally, let's examine the feature importance from this model `rf_best`. Run the following code (you do not need to understand how it works) to generate this graph.
+
+```{r}
+importance_df <- as.data.frame(importance(rf_best))
+importance_df$Feature <- rownames(importance_df)
+importance_sorted <- importance_df[order(-importance_df$IncNodePurity), ]
+
+ggplot(importance_sorted, aes(x = reorder(Feature, IncNodePurity), y = IncNodePurity)) +
+  geom_bar(stat = "identity", fill = "steelblue") +  # Bar plot with custom color
+  coord_flip() +  # Flip to make horizontal bars
+  labs(x = "Features", y = "Importance Score", title = "Feature Importance (Random Forest)") +
+  theme_minimal()
+```
+
+**Question 12.** Compare the important features from random forest with the significant variables from Linear Regression. Do they roughly match?
+
+**Answer 12.** *Yes, the most important features in the Random Forest model are YearBuilt, GrLivArea, GarageCars, GarageArea, GarageYrBuilt, BsmtFinSF1. These are all significant features in the linear regression model.*
+
+## (c) Boosting (25 Points)
+
+Finally, let's use boosted trees.
+
+### Default Parameters
+
+Again, we start with the default parameters, which you can see by running `?gbm`. Train this model and add its performance metrics to `results`.
+
+```{r}
+set.seed(0)
+
+boosted_tree = gbm(SalePrice ~ ., data = ames_train, cv.folds = 0) 
+
+results[5, ] <- data.frame(name="Boosted Trees (Default)", 
+                              r2 = calculate_r2(predict(boosted_tree, newdata=ames_train)),
+                              osr2 = calculate_osr2(predict(boosted_tree, newdata=ames_test)))
+results
+```
+
+### Cross Validation
+
+Now let's do some parameter tuning using cross validation. Let's keep `shrinkage` and `n.minobsinnode` at their default values of 0.1 and 10 respectively. Let's search over the n.trees in 100, 500, 1000, 3000 and interaction.depth in 1, 3, 5, 7, 9. To save computation time, let's just run 3-fold cross validation instead of 5 or 10.
+
+```{r}
+set.seed(0) 
+
+grid <- expand.grid(
+  n.trees = c(100,500,1000,3000), 
+  interaction.depth = c(1,3,5,7,9),
+  shrinkage = c(0.1),
+  n.minobsinnode = c(10)
+)
+
+gbm.cv <- train(y = ames_train$SalePrice,
+                      x = subset(ames_train, select=-c(SalePrice)),
+                      verbose=FALSE,
+                      method="gbm",
+                      tuneGrid=grid,
+                      trControl=trainControl(method="cv", number=3)
+                  )
+
+gbm.cv$results[, c("interaction.depth", "n.trees", "Rsquared")]
+```
+
+------------------------------------------------------------------------
+
+**Question 13.** In running this cross validation over the parameter grid, how many CART models did we build in total?
+
+**Answer 13.** *We built 69,000 CART models in total ( 5\*3\*(100+500+1000+3000)).*
+
+Let's see how the various parameters performed by plotting a heat map of R2. You do not need to understand how the following code works.
+
+```{r}
+gbm_plot <- gbm.cv$results %>% mutate(Rsquared = round(Rsquared, 4))  # Round Rsquared to 2 decimal places
+
+# Create the heatmap
+ggplot(gbm_plot, aes(x = as.factor(n.trees), y = as.factor(interaction.depth), fill = Rsquared)) +
+  geom_tile() +
+  geom_text(aes(label = Rsquared), color = "white", size = 4) + 
+  scale_fill_gradient(low = "red", high = "green") +
+  labs(x = "Number of Trees (n.trees)", y = "Interaction Depth", fill = "R²") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+------------------------------------------------------------------------
+
+**Question 14.** Discuss the impact of `interaction.depth` and `n.tree` on the cross-validated R2. Are there any signs of overfitting or underfitting?
+
+**Answer 14.** *We observe that as the interaction.depth increases, the R² generally improves, especially at higher depths like 7 and 9, indicating that deeper models with more complex interactions are capturing more variance in the data. Additionally, increasing the number of trees (n.trees) from 100 to 500 improves performance, but further increases (e.g., to 1000 and 3000) do not lead to significant gains and sometimes even result in a slight decline in R2. This suggests that beyond a certain point, adding more trees does not improve the model and may indicate overfitting. For smaller interaction.depth values (like 1), the R2 is relatively low, suggesting underfitting, as the model is too simple to capture the complexity of the data.*
+
+Let's see what the best parameters was.
+
+```{r}
+gbm.cv$bestTune
+```
+
+Train a model with the best parameter values and add its R2/OSR2 to our results dataframe.
+
+```{r}
+set.seed(0)
+opt_boost = gbm(SalePrice ~ ., data = ames_train, cv.folds = 0,
+                n.trees = 100,
+                interaction.depth = 9,
+                shrinkage = 0.1,
+                n.minobsinnode = 10) 
+
+results[6, ] <- data.frame(name="Boosted Trees with CV", 
+                              r2 = calculate_r2(predict(opt_boost, newdata=ames_train)),
+                              osr2 = calculate_osr2(predict(opt_boost, newdata=ames_test)))
+results
+```
+
+## (d) Model Comparison and Discussion (20 Points)
+
+Great work! We now have the performance for 6 different models. Let's discuss the results.
+
+*Note:* If you cannot see the model names in their entirety, you can open the table in a new window using one of the buttons at the top right of the cell output.
+
+```{r}
+results
+```
+
+**Question 15.** Comment on the performance of all 6 models. In particular please address:
+
+1.  The value of ensemble learning
+
+2.  The value of parameter tuning
+
+3.  Trade-offs in terms of running time and interpretability.
+
+**Answers 15.** *In general, the ensemble learning methods, such as Random Forest and Boosted Trees, show a better capability to fit in the sample data and give more accurate predictions, especially after efficient parameter tuning. However, these ensemble learning methods take a much longer period to compute, and also lack the interpretability.*
+
+1.  *Ensemble learning methods, such as Random Forest and Boosted Trees, clearly outperform single models like Linear Regression and CART in terms of R2 and OSR2. For example, Random Forest (both default and with cross-validation) achieves an R2 around 0.98, while Linear Regression achieves an R2 of about 0.81. Similarly, Boosted Trees with cross-validation outperforms Linear Regression and CART in both R2 and OSR2. These ensemble methods improve accuracy by aggregating multiple models, leading to stronger predictions and better generalization to unseen data by lowering the risk of overfitting, as reflected in their superior OSR2 values.*
+
+2.  *Parameter tuning plays a critical role in improving model performance. For instance, comparing the default Random Forest (R2 = 0.977) with the Random Forest tuned via cross-validation (R2 = 0.979) shows a slight improvement, however it also reduces the OSR2, from 0.863 to 0.862, which indicates that there may exist an overfitting problem. However, for Boosted Trees, tuning significantly enhances performance, with OSR2 increasing from 0.8129 (default) to 0.8607 (with cross-validation). This demonstrates that proper tuning can make a substantial difference, especially for boosting methods to achieve the best performance among all the presented models.*
+
+3.  *While ensemble methods such as Random Forest and Boosted Trees provide higher accuracy, they come with trade-offs in terms of running time and interpretability. Random Forests and Boosted Trees, especially when tuned through cross-validation, are computationally expensive and can take longer to train compared to simpler models like Linear Regression or CART. Additionally, while Linear Regression offers a straightforward and easily interpretable model, Random Forest and Boosted Trees are much more complex, making it difficult for practitioners to understand the exact relationships between the features and the target variable. Thus, there is a trade-off between achieving higher predictive accuracy and maintaining interpretability and computational efficiency, with ensemble models sacrificing interpretability for performance.*
+
+------------------------------------------------------------------------
+
+**Question 16.** For each of the following use-cases, please say which model (in rows 1-6) would be the best choice. Justify your answers.
+
+1.  You are a property developer who refurbishes properties through new construction and upgrades to maximize the resale value. You want a model where you can easily tell whether, for example, adding an extra fireplace or adding an extra bathroom will be more impactful to a property's predicted value. What model would you choose?
+2.  You are testifying in court in a litigation case involving unfair housing prices in the real estate market, and you will need to defend your methodology if asked. You need to explain exactly how your model made its predictions to a lay audience of jurors. To ensure you can provide satisfactory reasoning, what model would you use to determine housing prices?
+3.  You utilize data-driven models to estimate property values for a real-estate firm, advising your clients on asking prices and bidding price strategies to maximize their gain. You must provide daily updates to your clients using new price data that comes in on a daily basis, so your model cannot take too long to run. However, predictive performance is still very important. Which model would you use to help inform your recommendations?
+
+**Answers 16.**
+
+1.  *For this scenario, the best model would be Linear Regression. The reason is that linear regression provides easily interpretable coefficients, which allow the developer to directly assess the impact of adding specific features, such as a fireplace or bathroom, on the predicted property value. Each feature’s coefficient shows the marginal impact on the target variable (sale price), making it straightforward to compare the relative importance of different features. This interpretability is crucial for making informed decisions about which upgrades or changes would provide the highest return on investment.*
+2.  *For defending my methodology in court, CART with Cross-Validation would be the best choice. CART offers a clear and visual representation of how predictions are made, which can be easily explained to a lay audience, including jurors. The tree structure allows for a step-by-step explanation of the decision-making process, where each split can be justified based on specific variables. Moreover, CART models can easily be defended because they mimic a decision-making process that is more intuitive to non-experts compared to more complex ensemble methods. Additionally, the cross-validation step helps improve the model’s reliability, reducing overfitting while maintaining interpretability.*
+3.  *In this case, Random Forest without Cross-Validation (Default) would be the most suitable model. Random Forest offers a strong balance between predictive performance and running time. While it may not be as fast as simpler models like linear regression, it is much more accurate and still relatively efficient compared to Boosted Trees. Additionally, the cross-validation process did not make much progress according to the R2 and OSR2 results, so Random Forest without Cross-Validation (Default) would be the best model regarding the accuracy and computation at the same time.*

@@ -1,0 +1,332 @@
+---
+title: "15.071 Fall 2024: Assignment 5"
+subtitle: Collaborative Filtering and Network Analytics
+author: "Donghang Li"
+output: html_notebook
+---
+
+# Problem 1: Recommendation System for A Music Streaming Platform [45 Points]
+
+Music recommendation systems are the engines that drive the success of music listening services such as Spotify, Apple Music, Pandora, etc. In this assignment you will build a collaborative filtering (CF) model to predict the ratings of songs of music listeners, and then use the model to recommend songs to music listener subscribers. You have access to the following 3 datasets on the songs, users and their ratings.
+
+**Songs.** The dataset `Songs.csv` is a 2011 dataset containing data for 807 songs. Each row contains the song title, song ID, the year the song was produced, the name of the recording artist, and the song’s “genre” for each of the 807 songs. There are 7 music genres, namely:
+
+-   Country
+-   Electronic
+-   Folk
+-   Pop
+-   Rap
+-   RnB
+-   Rock
+
+**Users.** The dataset `Users.csv` lists the UserID of 2421 music listeners, i.e., subscribers. The users are simply numbered from 1 through 2421, so this dataset is not very interesting.
+
+**Ratings.** The dataset `MusicRatings.csv` contains the ratings of songs by subscribers on a numerical scale between 1.00 and 5.00. This dataset contains 289,409 pairs of subscribers and songs along with the rating which a subscriber has given to that song. Each subscriber has listened to and rated an average 119.5 songs (119.5 = 289409/2421), which is only 15% of all of the songs.
+
+In this exercise you will construct a CF model to impute the ratings of the remaining 85% of the song/subscriber pairs. The ultimate goal is to then use each subscriber’s imputed ratings of all songs to develop individual recommendations for each subscriber.
+
+First, let's import the required data and set up our analysis. Note that the `source("functionsCF.R")` command is used to load a special set of functions that we wrote for this assignment. It is kept in a separate file in order to keep this notebook clean. Note that if you are missing any packages, you should run \`install.packages('<Package Name>').
+
+```{r}
+library(softImpute)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(reshape2)
+source("functionsCF.R")
+
+# Import datasets
+songs <- read.csv("Songs.csv")
+users <- read.csv("Users.csv")
+music <- read.csv("MusicRatings.csv")
+
+head(music, 5)
+```
+
+**Train/Test Split.** Let's divide the dataset into a test train split, where 90% of the observed user-song ratings will go into the training set. Here, we use the function `cf.training.set`, one of the functions provided in `functionsCF.R`. The function takes as inputs the list of users, the list of rated songs, and a proportion of observations that will go into the training set. It returns the list of rows that will go into the training set, but as opposed to our traditional procedure, this function is specially designed to ensure that all users and all songs appear in the training set at least once.
+
+```{r}
+set.seed(15071)
+training.rows <- cf.training.set(music$userID, music$songID, prop=0.90)
+music.train <- music[training.rows,]
+music.test <- music[-training.rows,]
+mat.train <- Incomplete(music.train[,1], music.train[,2], music.train[,3])
+mat.train[1:5, 1:5]
+```
+
+In the matrix above, a dot (.) means that a rating is missing. Out of the first 5 songs and first 5 users, there are only 3 ratings (2.28, 1.42 and 1.42).
+
+**Data Scaling.** We scale our dataset so that the mean of each row and column is 0. This is similar to our normalization procedure in clustering. The idea is that a rating of 2 might mean a user hates this song, if the user typically rates between 2 and 3. On the other hand, for a user who typically rates between 1 and 2, a rating of 2 means they love the song. By scaling the ratings, we account for inherent differences in how a user perceives the rating scale. The `biScale` function below does this for us.
+
+```{r}
+set.seed(15071)
+mat.scaled <- biScale(mat.train, maxit=1000, row.scale = FALSE, col.scale = FALSE)
+mat.scaled[1:5, 1:5]
+```
+
+After performing the scaling, we see that the ratings of 1.6, 1.0 and 1.0 are transformed into 0.277, -0.237 and -0.602. You can find more details on scaling in Slides 53-55 of Lecture 13. Note that we did not go over these slides in class.
+
+## (a) Cross Validation to Find the Best k [10 Points]
+
+Let's find the best number of archetypes, k, using cross validation. Ideally, we would use 10-fold cross validation to find the best k, but this is time-consuming. Instead, we will simply split the training data into 95% train, 5% validation and try various values of k on the 5% validation.
+
+Here, we provide a function `cf.evaluation.ranks(data, ranks, prop.validate)`, which takes our dataset `data`, the set of k-values we want to try (k is also called the rank) called `ranks`, and the proportion of the training data to be used for validation `prop.validate`. This function returns the validation r2, MAE and RSME for each value of k.
+
+```{r}
+rank.info <- cf.evaluate.ranks(music.train, 0:7, prop.validate=0.05)
+
+plot(rank.info$rank, rank.info$r2, main="R^2 on Validation Set")
+```
+
+**Question 1**. What is the best number of archetypes k according to the plot above using R2 as our evaluation metric? Is this what you would have intuitively guessed given the number of genres?
+
+**Answer 1**. *The best number of archetypes k is 2 according to the plot. Actually this is not what I previously guessed, which I think is a little bit small. Because we have 2431 users and 7 genres, setting the best archetype number to be 2 would be too simple.*
+
+------------------------------------------------------------------------
+
+**Question 2.** What are the trade-offs between choosing a large k and a small k?
+
+**Answer 2.** *A small k, which means too few archetypes, cannot capture the richness of music preferences, thus resulting in lack of prediction accuracy. But a small k can reduce computation cost, increase model interpretability, and avoid over-fitting. While a large k with too many archetypes may lead to over-fitting and increase the complexity of the model, but the prediction accuracy of the model may increase, because it provides more details of users' preference.*
+
+## (b) Calculate Out-of-Sample R2 [10 Points]
+
+Let's continue with k = 3 archetypes. Now, let's use the `softImpute` to find our archetype ratings and user compositions. Then, use the `impute` function to predict the ratings for the user/song pairs in our training and testing set. We scale the ratings to be between 1 and 5. Then, we use the actual rating in `music.train$rating` and `music.test$rating` to calculate the in-sample and out-of-sample R2.
+
+```{r}
+set.seed(15071)
+
+fit <- softImpute(mat.scaled, rank.max=3, lambda=0, maxit=1000)
+
+# Making predictions
+pred_insample_0 <- impute(fit, music.train$userID, music.train$songID, unscale=TRUE)
+pred_outsample_0 <- impute(fit, music.test$userID, music.test$songID, unscale=TRUE)
+
+# Rescale predictions to be between 1 and 5
+pred_insample <- pmax(pmin(pred_insample_0, 5), 1)
+pred_outsample <- pmax(pmin(pred_outsample_0, 5), 1)
+
+# Calculate in-sample and out-of-sample R² values
+R2_insample<- 1 - sum((pred_insample-music.train$rating)^2)/sum((mean(music.train$rating) - music.train$rating)^2)
+R2_outsample <- 1 - sum((pred_outsample-music.test$rating)^2)/sum((mean(music.test$rating) - music.test$rating)^2)
+
+R2_insample
+R2_outsample
+```
+
+**Question 3.** What is the in-sample and out-of-sample R2? Are there signs of over-fitting?
+
+**Answer 3.** *The in-sample R2 is 0.416, and the out-of-sample R2 is 0.315. Considering that the in-sample R2 is greatly larger than the out-of-sample R2, there is a sign of over-fitting. But this over-fitting is moderate and acceptable.*
+
+## (c) Examining the Archetypes [20 Points]
+
+Recall that the two key components of collaborative filtering are the archetype ratings and the user composition. These two are provided through `fit$u` and `fit$v`. Let's examine the dimensions of each of these two matrices:
+
+```{r}
+dim(fit$u)
+```
+
+```{r}
+dim(fit$v)
+```
+
+**Question 4.** Given the dimensions above, determine which of `fit$u` or `fit$v` is the archetype ratings and which is the user composition. Explain your reasoning.
+
+**Answer 4.** *fit\$u is the user composition because the first dimension is 2421, which corresponds to the number of users. fit\$v is the archetype ratings because the first dimension is 807, which corresponds to the number of music songs.*
+
+--
+
+**Question 5.** What are the 3 archetype's ratings for song 10? What is user 100's composition across the 3 archetypes? Use the two code cells below to compute your answers.
+
+```{r}
+fit$v[10,]
+```
+
+```{r}
+fit$u[100,]
+```
+
+**Answer 5.** *The 3 archetype's ratings for song 10 are 0.0417, -0.0586, 0.0010, respectively. User 100's composition across the 3 archetypes is 0.0924, -0.0213, -0.0476, respectively.*
+
+Let's add the archetype ratings of each song to the `songs` dataframe. Add three columns to `songs` called `score1`, `score2` and `score3`, which are the ratings given by archetype 1, 2 and 3 for that particular song. Note that the columns `score1`, `score2` and `score3` should contain small positive and negative numbers as they represent the scaled score of each archetype.
+
+```{r}
+# Create new columns for archetype scores
+songs$score1 <- fit$v[,1]
+songs$score2 <- fit$v[,2]
+songs$score3 <- fit$v[,3]
+
+head(songs)
+```
+
+For each of the 3 archetypes, let's compute their average rating across songs for each of the 7 genres. The following code takes the `songs` dataframe, group it by `genre` and calculates the mean of `score1`, `score2`, and `score3`. Then, some code is used to visualize the heatmap.
+
+```{r}
+# Aggregate scores by artist
+agg_diff <- songs %>%
+  group_by(genre) %>%
+  summarize(score1 = mean(score1),
+            score2 = mean(score2),
+            score3 = mean(score3))
+
+## Visualization
+melted_data <- melt(agg_diff, id.vars = "genre")
+
+ggplot(melted_data, aes(x = variable, y = genre, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "red", mid = "white", high = "blue", 
+                      midpoint = 0,
+                      name = "Score") +
+  theme_minimal() +
+  labs(x = "Score Type", y = "Genre",
+       title = "Genre Score Heatmap") +
+  theme(axis.text.x = element_text(angle = 0),
+        panel.grid = element_blank()) +
+  coord_fixed()
+```
+
+**Question 6.** Using the heatmap above, provide a brief description of each of the 3 archetypes.
+
+**Answer 6.** *The archetype 1 shows a higher preference for folk music, while shows the lowest preference for country music (dislike), neutral to other genres. The archetype 2 prefers electronic music best, while also shows a high preference for RnB, Rap, and Rock music, relatively neutral to Pop, Folk, and Country. The archetype 3 likes pop music best, also prefer folk music, while it dislikes country music, rap and rnb, relatively neutral to electronic and rock.*
+
+## (d) Making a Recommendation [5 Points]
+
+Let's make a recommendation for the user whose ID is 1089. Let's call this user Talia.
+
+```{r}
+predictions_1089 = impute(fit, rep(1089, nrow(songs)), songs$songID, unscale=TRUE)
+
+songs$talia_prediction = predictions_1089
+songs_for_talia <- songs %>% arrange(desc(talia_prediction))
+head(songs_for_talia[, c('songName', 'year', 'artist', 'genre', 'talia_prediction')])
+
+songs_for_talia[1,]$songName
+```
+
+**Question 7**. Explain what is going on in the code above. What song does the recommendation engine say that Talia should listen to next? Which of the 3 archetypes do you think Talia fits the most?
+
+**Answer 7.** *This code is used to generate personalized song recommendations for the user Talia using a recommendation engine. First, it predicts Talia’s ratings for all songs based on the trained softImpute model and stores these predicted values in the songs data frame. Then, the data frame is sorted in descending order by the predicted ratings, and the top recommended songs are extracted. According to the result, Talia should listen to They Might Follow You next. I think Talia fits archetype 3 most, because they share a similar preference for pop and folk music.*
+
+# Problem 2: Social Network of the United States Senate [40 Points]
+
+The Senate is one of the two chambers in the legislative branch of the United States federal government. It comprises 100 members—two senators from each of the 50 states elected to a 6-year term. The other chamber is the House of Representatives, which comprises 435 members elected to a 2-year term.
+
+To pass, amend or repeal a law, a member of Congress must introduce a bill, which describes the details of the new law or the proposed changes to the old law. The Senator or Representative who introduces the bill is known as its “sponsor”. Other members of the sponsor’s chamber may also sign on as “co-sponsors” to indicate their support for the bill.
+
+In this assignment, you will explore the social network of the US Senate induced by bill co-sponsorship. You will focus on the 116th Congress, which began on January 3, 2019, and concluded on January 3, 2021. The data were obtained from <https://www.gpo.gov/fdsys/bulkdata/BILLSTATUS/116>.
+
+The social network will include each Senator as a node and edges among any pair of Senators who have co-sponsored 8 or more bills together. The file senators.csv contains the list of all Senators who served during the 116th Congress, including their name, state, party affiliation (R - Republican, D - Democrat, I - Independent),and an ID number from 1–102. Note that there are more than 100 senators because of interim changes in Congress membership. Also included in this file are (x,y) coordinates corresponding to the latitude and longitude of points within each state — we will use these co-ordinates to visualize our network on a map.
+
+The file `senateCosponsorship.csv` contains a list of all pairs of Senators (referred to by their ID numbers) who have co-sponsored at least 8 bills together.
+
+Run the following commands to create a graph `G` (recall from lecture that “graph” and “network” are synonymous):
+
+```{r}
+library(igraph)
+
+senators <- read.csv("senators.csv")
+senatorLinks <- read.csv("senateCosponsorship.csv", stringsAsFactors=FALSE)
+
+# Create graph
+G <- graph_from_data_frame(senatorLinks, directed=FALSE, senators)
+
+party_colors <- ifelse(senators$party == "R", "red",
+                      ifelse(senators$party == "D", "blue", "yellow"))
+
+plot(G,
+     vertex.size = 50,
+     vertex.label = NA,
+     edge.curved = TRUE,
+     layout = cbind(V(G)$x, V(G)$y),
+     rescale = FALSE,
+     xlim = range(senators$x), ylim = range(senators$y),
+     vertex.color = party_colors,
+     edge.color = adjustcolor("grey", alpha=0.3),
+     edge.width = 1
+     )
+maps::map("state", add = TRUE, col = "black")
+```
+
+## (a): Centrality Measures [30 Points]
+
+Compute the degree centrality, the closeness centrality, and the betweenness centrality of the Senators in the graph G. Add these metrics as columns to the `senators` table.
+
+```{r}
+degree_centrality <- degree(G, mode="total")
+closeness_centrality = closeness(G)
+betweenness_centrality = betweenness(G)
+
+senators$degree <- degree_centrality
+senators$closeness <- closeness_centrality
+senators$betweenness <- betweenness_centrality
+
+head(senators)
+```
+
+### Degree Centrality
+
+**Question 8**. Compute the 3 senators with the highest degree centrality. Who is the senator with the highest degree centrality? Interpret the numerical value of the degree centrality for this senator.
+
+```{r}
+senators_degree <- senators %>% arrange(desc(degree))
+head(senators_degree[, c('id', 'name', 'degree')], 3)
+```
+
+**Answer 8.** *Amy Klobuchar is the senator with the highest degree centrality. The degree centrality value is 56 and this means she has 56 direct neighbors in the network, indicating that she is highly connected and influential. A high degree centrality suggests that Amy Klobuchar has direct interactions or relationships with a large number of other senators, positioning her as a significant figure for direct communication and collaboration within the network.*
+
+### Closeness Centrality
+
+**Question 9** Compute the 3 senators with the highest closeness centrality. Who is the senator with the highest closeness centrality? Interpret the numerical value of the closeness centrality for this senator.
+
+```{r}
+senators_closeness <- senators %>% arrange(desc(closeness))
+head(senators_closeness[, c('id', 'name', 'closeness')], 6)
+```
+
+**Answer 9.** *Because the first 3 senators have the same value, I set the number here to be 6 instead of 3.* *Susan Collins, Amy Klobuchar, and Tina Smith are the senators with the highest closeness centrality, each having a value of 0.00649. This indicates that these senators are well-positioned within the network and can reach other senators more efficiently than others. The numerical value of 0.00649 implies that they have a relatively short average distance to all other senators in the network, making them central figures for communication and influence.*
+
+### Betweenness Centrality
+
+**Question 10.** Compute the 3 senators with the highest betweenness centrality. Who is the senator with the highest betweenness centrality? Interpret the numerical value of the betweenness centrality for this senator.
+
+```{r}
+senators_betweenness <- senators %>% arrange(desc(betweenness))
+head(senators_betweenness[, c('id', 'name', 'betweenness')], 3)
+```
+
+**Answer 10.** *Marco Rubio is the senator with the highest betweenness centrality. The betweenness centrality value is 334.1835. This means he plays a crucial role as an intermediary in the network, connecting different groups of senators. The high betweenness centrality value indicates that many of the shortest paths between other senators pass through him, positioning him as a key figure for facilitating communication and influence within the network.*
+
+------------------------------------------------------------------------
+
+**Question 11.** Comment on your answers from Questions 8, 9 and 10 and how this speaks to differences between centrality measures.
+
+**Answer 11.** *The answers to Questions 8, 9, and 10 illustrate how different centrality measures capture various aspects of a senator’s importance within the network. Amy Klobuchar’s highest degree centrality indicates her extensive direct connections, showcasing her immediate influence. The highest closeness centrality shared by Susan Collins, Amy Klobuchar, and Tina Smith shows their efficiency in reaching others quickly, emphasizing their central positions relative to the entire network. In contrast, Marco Rubio’s highest betweenness centrality highlights his role as a key intermediary, influencing communication between different groups. These differences demonstrate that degree centrality reflects direct influence, closeness centrality measures access and reach efficiency, and betweenness centrality indicates a node’s role in bridging the network.*
+
+## (b) Community Detection [10 Points]
+
+Use the `cluster_spinglass` to divide the graph into 3 communities by choosing `spins=3`. Report the size of each of the 3 communities as well as the number of Democrat, Republican and Independent senators in each community. You can use `V(G)$party` to get a list of "R", "D" and "I" (Republicans, Democrats and Independents) that correspond with `sg_community$membership`.
+
+```{r}
+set.seed(15071)
+
+sg_community <- cluster_spinglass(G, spins = 3)
+
+senator_info <- data.frame(
+  name = V(G)$name,
+  party = V(G)$party,
+  community = sg_community$membership
+)
+
+summary <- aggregate(name ~ community, data = senator_info, FUN = length)
+colnames(summary)[2] <- "size"
+
+party_counts <- as.data.frame.matrix(table(senator_info$community, senator_info$party))
+party_counts$community <- rownames(party_counts)
+
+final_summary <- merge(summary, party_counts, by = "community")
+colnames(final_summary)[3:5] <- c("Democrats", "Independents", "Republicans")
+final_summary
+```
+
+**Question 12.** Discuss the communities in terms of party membership. Is this surprising? What might you say about the senators in community 3?
+
+**Answer 12.** *Community 1 consists of 40 Democrats, 2 Republicans, and 1 Independent, which indicates that this community mainly includes Democrats, suggesting strong internal cohesion within the Democratic Party. Community 2 consists of 3 Democrats, 0 Independents, and 46 Republicans, showing that it is predominantly composed of Republicans, which aligns with the expectation that members of the same party tend to cluster together due to shared ideologies and goals. Community 3, with 3 Democrats, 6 Republicans, and 1 Independent, stands out as a more mixed group. This suggests that senators in community 3 may have more bipartisan or independent perspectives, potentially working across party lines on certain issues. It is not surprising to see senators from the same party forming distinct communities, as shared political alignment often leads to similar legislative priorities and collaboration. Community 3’s composition might indicate a group of senators who are more moderate or willing to collaborate outside strict party affiliations.*
