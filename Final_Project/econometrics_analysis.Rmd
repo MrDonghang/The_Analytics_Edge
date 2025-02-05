@@ -1,0 +1,240 @@
+---
+title: "Fuel_Price_Analysis"
+author: "Donghang Li"
+date: "2024-12-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Package Loading
+
+```{r}
+library(plm)
+library(ggplot2)
+```
+
+## Data Reading
+
+```{r}
+df = read.csv('/Users/donghang/Desktop/Fuel_Price/aggregated_data.csv')
+colnames(df)[colnames(df) == "quater"] <- "quarter"
+df
+```
+
+```{r}
+df$airline_id = as.factor(df$airline_id)
+df$name = as.factor(df$name)
+df$aircraft_type = as.factor(df$aircraft_type)
+df$time = as.factor(df$time)
+df$quarter = as.factor(df$quarter)
+str(df)
+```
+
+## Regression Models
+
+```{r}
+# Multi linear regression
+model <- lm(ln_fuel ~ ln_average_fuel_price + ln_number_of_flights + ln_airborne_hours + ln_distance +
+               ln_payload + quarter + name + aircraft_type, data = df)
+summary(model)
+```
+
+```{r}
+df$id <- interaction(df$name, df$aircraft_type, sep = "_")
+pdata <- pdata.frame(df, index = c("id", "time"))
+pdata
+```
+
+```{r}
+# Fixed Effect Regression
+pdata <- pdata.frame(df, index = c("id", "time"))
+fe_model <- plm(ln_fuel ~ ln_average_fuel_price + ln_number_of_flights + ln_airborne_hours + ln_distance + ln_payload, data = pdata, model = "within")
+summary(fe_model)
+```
+
+```{r}
+re_model <- plm(ln_fuel ~ ln_average_fuel_price + ln_number_of_flights + ln_airborne_hours + ln_distance + ln_payload, data = pdata, model = "random")
+
+hausman_test <- phtest(fe_model, re_model)
+print(hausman_test)
+```
+
+```{r}
+lagged_vars <- paste0("ln_fuel_price_t_minus_", 1:8)
+independent_vars <- c("ln_number_of_flights", 
+                      "ln_airborne_hours", "ln_distance", "ln_payload", 
+                      "quarter", "name", "aircraft_type")
+
+results <- data.frame(Index = integer(),
+                      Lagged_Variable = character(),
+                      Coefficient = numeric(),
+                      CI_Lower = numeric(),
+                      CI_Upper = numeric(),
+                      R_squared = numeric(),
+                      stringsAsFactors = FALSE)
+
+base_model <- lm(ln_fuel ~ ln_average_fuel_price + ln_number_of_flights + ln_airborne_hours + ln_distance +
+               ln_payload + quarter + name + aircraft_type, data = df)
+base_ci <- confint(base_model)["ln_average_fuel_price", ]
+
+results <- rbind(results, 
+                 data.frame(Index = 0,
+                            Lagged_Variable = "No Lag Variable", 
+                            Coefficient = coef(base_model)["ln_average_fuel_price"], 
+                            CI_Lower = base_ci[1], 
+                            CI_Upper = base_ci[2], 
+                            R_squared = summary(base_model)$r.squared))
+
+for (i in 1:8) {
+    lag_var <- lagged_vars[i]
+    formula_str <- paste("ln_fuel ~", 
+                         paste(c(independent_vars, lag_var), collapse = " + "))
+    
+    model <- lm(as.formula(formula_str), data = df)
+    
+    coef_value <- coef(model)[lag_var]
+    conf_int <- confint(model)[lag_var, ]
+    r_squared <- summary(model)$r.squared
+    
+    results <- rbind(results, 
+                     data.frame(Index = i,
+                                Lagged_Variable = lag_var, 
+                                Coefficient = coef_value, 
+                                CI_Lower = conf_int[1], 
+                                CI_Upper = conf_int[2], 
+                                R_squared = r_squared))
+}
+
+print(results)
+```
+
+```{r}
+x_labels <- c("current", paste0("pre", 1:8))
+
+p <- ggplot(results, aes(x = Index, y = Coefficient)) +
+  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+                width = 0.2, color = "darkgray") +
+  geom_line(color = "#E76000", size = 0.5) +
+  geom_point(color = "#5d3c93", size = 3, alpha=0.5) +
+  theme_bw() +
+  labs(title = "Lagged Fuel Price Coefficient Trend",
+       x = "Period",
+       y = "Coefficient") +
+    scale_x_continuous(breaks = 0:8, labels = x_labels) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p
+```
+
+```{r}
+aircraft_types <- unique(df$aircraft_type)
+
+results <- data.frame(Aircraft_Type = character(),
+                      Coefficient = numeric(),
+                      CI_Lower = numeric(),
+                      CI_Upper = numeric(),
+                      R_squared = numeric(),
+                      stringsAsFactors = FALSE)
+
+for (aircraft in aircraft_types) {
+  df_subset <- subset(df, aircraft_type == aircraft)
+  
+  model <- lm(ln_fuel ~ ln_fuel_price_t_minus_2 + ln_number_of_flights +
+                ln_airborne_hours + ln_distance + ln_payload + quarter + name, 
+              data = df_subset)
+  
+  # 提取系数、置信区间和 R²
+  coef_value <- coef(model)["ln_fuel_price_t_minus_2"]
+  conf_int <- confint(model)["ln_fuel_price_t_minus_2", ]
+  r_squared <- summary(model)$r.squared
+  
+  # 保存结果
+  results <- rbind(results, 
+                   data.frame(Aircraft_Type = aircraft, 
+                              Coefficient = coef_value, 
+                              CI_Lower = conf_int[1], 
+                              CI_Upper = conf_int[2], 
+                              R_squared = r_squared))
+}
+
+# 打印结果
+print(results)
+```
+
+```{r}
+p <- ggplot(results, aes(x = Aircraft_Type, y = Coefficient, group = 1)) +
+  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+                width = 0.2, color = "darkgray") +
+  geom_line(color = "#E76000", size = 0.5) +
+  geom_point(color = "#5d3c93", size = 3, alpha=0.5) +
+  theme_bw() +
+  labs(title = "Disparities across different aircraft types",
+       x = "Aircraft Type",
+       y = "Coefficient") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p
+```
+
+```{r}
+selected_airlines <- c("WN", "AA", "UA", "DL", "CO", "US", "AS", "VX")
+
+results <- data.frame(Name = character(),
+                      Coefficient = numeric(),
+                      CI_Lower = numeric(),
+                      CI_Upper = numeric(),
+                      R_squared = numeric(),
+                      stringsAsFactors = FALSE)
+
+for (airline in selected_airlines) {
+  df_subset <- subset(df, name == airline)
+  
+  model <- lm(ln_fuel ~ ln_fuel_price_t_minus_2 + ln_number_of_flights +
+                ln_airborne_hours + ln_distance + ln_payload + quarter + aircraft_type, 
+                data = df_subset)
+    
+  coef_value <- coef(model)["ln_fuel_price_t_minus_2"]
+  conf_int <- confint(model)["ln_fuel_price_t_minus_2", ]
+  r_squared <- summary(model)$r.squared
+    
+  results <- rbind(results, 
+                     data.frame(Name = airline, 
+                                Coefficient = coef_value, 
+                                CI_Lower = conf_int[1], 
+                                CI_Upper = conf_int[2], 
+                                R_squared = r_squared))
+}
+
+print(results)
+```
+
+```{r}
+p <- ggplot(results, aes(x = Name, y = Coefficient, group = 1)) +
+  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+                width = 0.2, color = "darkgray") +
+  geom_line(color = "#E76000", size = 0.5) +
+  geom_point(color = "#5d3c93", size = 3, alpha=0.5) +
+  theme_bw() +
+  labs(title = "Disparities across different airline companies",
+       x = "Airline Company",
+       y = "Coefficient") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p
+```
+
+```{r}
+airline_list <- unique(df$name)
+print(airline_list)
+```
+
+```{r}
+df_subset <- subset(df, aircraft_type == "B777")
+                      
+model <- lm(ln_fuel ~ ln_number_of_flights + ln_airborne_hours + ln_distance + 
+              ln_average_fuel_price, data = df_subset)
+
+summary(model)
+```
